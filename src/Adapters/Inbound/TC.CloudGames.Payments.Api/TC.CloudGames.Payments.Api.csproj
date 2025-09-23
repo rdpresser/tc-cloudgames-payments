@@ -1,0 +1,30 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.22.1" />
+		<PackageReference Include="Marten" Version="8.11.0" />
+		<PackageReference Include="FastEndpoints.Swagger" Version="7.0.1" />
+		<PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.9" />
+		<PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.4" />
+		<PackageReference Include="Weasel.Core" Version="8.1.1" />
+		<PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+		<PackageReference Include="Serilog.Enrichers.Sensitive" Version="2.1.0" />
+		<PackageReference Include="Serilog.Enrichers.Span" Version="3.1.0" />
+		<PackageReference Include="Serilog.Sinks.Grafana.Loki" Version="8.3.1" />
+		<PackageReference Include="DotNetEnv" Version="3.1.1" />
+		<PackageReference Include="Bogus" Version="35.6.3" />
+		<PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
+		<PackageReference Include="AspNetCore.HealthChecks.UI.Client" Version="9.0.0" />
+		<PackageReference Include="WolverineFx" Version="4.12.1" />
+		<PackageReference Include="WolverineFx.AzureServiceBus" Version="4.12.1" />
+		<PackageReference Include="WolverineFx.Marten" Version="4.12.1" />
+		<PackageReference Include="WolverineFx.RabbitMQ" Version="4.12.1" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\..\..\..\..\..\shared\common\src\TC.CloudGames.Messaging\TC.CloudGames.Messaging.csproj" />
+	  <ProjectReference Include="..\..\..\Core\TC.CloudGames.Payments.Application\TC.CloudGames.Payments.Application.csproj" />
+	  <ProjectReference Include="..\..\Outbound\TC.CloudGames.Payments.Infrastructure\TC.CloudGames.Payments.Infrastructure.csproj" />
+	</ItemGroup>
+
+</Project>

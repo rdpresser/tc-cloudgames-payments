@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<ItemGroup>
+		<PackageReference Include="FastEndpoints" Version="7.0.1" />
+		<PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="12.0.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\..\..\..\..\shared\common\src\TC.CloudGames.Contracts\TC.CloudGames.Contracts.csproj" />
+	  <ProjectReference Include="..\..\..\..\..\shared\common\src\TC.CloudGames.SharedKernel\TC.CloudGames.SharedKernel.csproj" />
+	  <ProjectReference Include="..\TC.CloudGames.Payments.Domain\TC.CloudGames.Payments.Domain.csproj" />
+	</ItemGroup>
+
+</Project>

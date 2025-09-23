@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<ItemGroup>
+		<PackageReference Include="Marten" Version="8.11.0" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.9" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\..\..\..\..\..\shared\common\src\TC.CloudGames.SharedKernel\TC.CloudGames.SharedKernel.csproj" />
+	  <ProjectReference Include="..\..\..\Core\TC.CloudGames.Payments.Application\TC.CloudGames.Payments.Application.csproj" />
+	  <ProjectReference Include="..\..\..\Core\TC.CloudGames.Payments.Domain\TC.CloudGames.Payments.Domain.csproj" />
+	</ItemGroup>
+
+</Project>
