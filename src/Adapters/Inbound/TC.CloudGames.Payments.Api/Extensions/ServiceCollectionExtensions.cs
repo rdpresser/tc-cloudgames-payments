@@ -62,7 +62,8 @@
             builder.Host.UseWolverine(opts =>
             {
                 opts.UseSystemTextJsonForSerialization();
-                opts.Discovery.IncludeAssembly(typeof(PaymentHandler).Assembly);
+                opts.Discovery.IncludeAssembly(typeof(ChargePaymentRequestHandler).Assembly);
+                Console.WriteLine(opts.DescribeHandlerMatch(typeof(ChargePaymentRequestHandler)));
 
                 // -------------------------------
                 // Define schema for Wolverine durability and Postgres persistence
@@ -101,6 +102,15 @@
                         // Durable outbox
                         opts.Policies.UseDurableOutboxOnAllSendingEndpoints();
 
+                        ////opts.ListenToRabbitQueue("payments-rpc-queue", config =>
+                        ////{
+                        ////    config.IsDurable = true;
+                        ////});
+
+                        // O serviço de pagamentos ouve a fila de requisições
+                        opts.ListenToRabbitQueue("charge-payment-queue")
+                            .UseDurableInbox();
+
                         break;
 
                     case BrokerType.AzureServiceBus when broker.ServiceBusSettings is { } sb:
@@ -112,6 +122,9 @@
 
                         // Durable outbox for all sending endpoints
                         opts.Policies.UseDurableOutboxOnAllSendingEndpoints();
+
+                        opts.ListenToAzureServiceBusQueue("payments-rpc-queue")
+                            .UseDurableInbox();
 
                         opts.RegisterPaymentEvents();
                         break;

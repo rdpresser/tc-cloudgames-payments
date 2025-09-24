@@ -1,16 +1,15 @@
 ﻿namespace TC.CloudGames.Payments.Application.MessageBrokerHandlers
 {
-    public class PaymentHandler : IWolverineHandler
+    public class ChargePaymentRequestHandler
     {
         private readonly IPaymentRepository _paymentRepository;
 
-        public PaymentHandler(IPaymentRepository paymentRepository)
+        public ChargePaymentRequestHandler(IPaymentRepository paymentRepository)
         {
             _paymentRepository = paymentRepository ?? throw new ArgumentNullException(nameof(paymentRepository));
         }
 
-        ////public async Task<ChargePaymentResponse> HandleAsync(EventContext<ChargePaymentRequest> @event, CancellationToken cancellationToken)
-        public async Task<ChargePaymentResponse> HandleAsync(ChargePaymentRequest @event)
+        public async Task<ChargePaymentResponse> Handle(ChargePaymentRequest @event)
         {
             try
             {
@@ -24,13 +23,21 @@
                     PurchaseDate = DateTimeOffset.UtcNow
                 };
 
-                await _paymentRepository.SaveAsync(payment).ConfigureAwait(false);
+                await _paymentRepository.SaveAsync(payment);
 
-                return new ChargePaymentResponse(true, payment.Id, string.Empty);
+                return new ChargePaymentResponse(
+                    success: true,
+                    paymentId: payment.Id,
+                    errorMessage: string.Empty
+                );
             }
             catch (Exception ex)
             {
-                return new ChargePaymentResponse(false, Guid.Empty, ex.Message);
+                return new ChargePaymentResponse(
+                    success: false,
+                    paymentId: null,
+                    errorMessage: ex.Message
+                );
             }
         }
     }

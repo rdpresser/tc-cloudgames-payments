@@ -17,7 +17,7 @@
         public async Task SaveAsync(PaymentAggregate aggregate, CancellationToken cancellationToken = default)
         {
             _session.Store(aggregate);
-            await _session.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await _session.SaveChangesAsync(cancellationToken);
         }
     }
 }
