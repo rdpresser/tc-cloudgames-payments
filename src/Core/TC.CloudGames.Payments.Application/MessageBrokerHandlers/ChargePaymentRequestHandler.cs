@@ -9,26 +9,27 @@
             _paymentRepository = paymentRepository ?? throw new ArgumentNullException(nameof(paymentRepository));
         }
 
-        public async Task<ChargePaymentResponse> Handle(ChargePaymentRequest @event)
+        // Wolverine RPC convention: método deve retornar a response esperada
+        public async Task<ChargePaymentResponse> Handle(ChargePaymentRequest request, CancellationToken cancellationToken = default)
         {
             try
             {
                 var payment = new PaymentAggregate
                 {
                     Id = Guid.NewGuid(),
-                    GameId = @event.GameId,
-                    UserId = @event.UserId,
-                    Amount = @event.Amount,
+                    GameId = request.GameId,
+                    UserId = request.UserId,
+                    Amount = request.Amount,
                     GameName = string.Empty, //adicionar gamename no RPC
                     PurchaseDate = DateTimeOffset.UtcNow
                 };
 
-                await _paymentRepository.SaveAsync(payment);
+                await _paymentRepository.SaveAsync(payment, cancellationToken);
 
                 return new ChargePaymentResponse(
                     success: true,
                     paymentId: payment.Id,
-                    errorMessage: string.Empty
+                    errorMessage: null
                 );
             }
             catch (Exception ex)

@@ -63,7 +63,7 @@
             {
                 opts.UseSystemTextJsonForSerialization();
                 opts.Discovery.IncludeAssembly(typeof(ChargePaymentRequestHandler).Assembly);
-                Console.WriteLine(opts.DescribeHandlerMatch(typeof(ChargePaymentRequestHandler)));
+                Console.WriteLine($"Handler discovery: {opts.DescribeHandlerMatch(typeof(ChargePaymentRequestHandler))}");
 
                 // -------------------------------
                 // Define schema for Wolverine durability and Postgres persistence
@@ -102,14 +102,13 @@
                         // Durable outbox
                         opts.Policies.UseDurableOutboxOnAllSendingEndpoints();
 
-                        ////opts.ListenToRabbitQueue("payments-rpc-queue", config =>
-                        ////{
-                        ////    config.IsDurable = true;
-                        ////});
-
-                        // O serviço de pagamentos ouve a fila de requisições
-                        opts.ListenToRabbitQueue("charge-payment-queue")
-                            .UseDurableInbox();
+                        // CONFIGURAÇÃO RPC PARA RECEBER CHARGE PAYMENT REQUESTS
+                        // O serviço de pagamentos ouve a fila de requisições e automaticamente responde
+                        opts.ListenToRabbitQueue("charge-payment-queue", configure =>
+                        {
+                            configure.IsDurable = true;
+                        })
+                        .UseDurableInbox();
 
                         break;
 
@@ -123,7 +122,8 @@
                         // Durable outbox for all sending endpoints
                         opts.Policies.UseDurableOutboxOnAllSendingEndpoints();
 
-                        opts.ListenToAzureServiceBusQueue("payments-rpc-queue")
+                        // CONFIGURAÇÃO RPC PARA AZURE SERVICE BUS
+                        opts.ListenToAzureServiceBusQueue("charge-payment-queue")
                             .UseDurableInbox();
 
                         opts.RegisterPaymentEvents();
