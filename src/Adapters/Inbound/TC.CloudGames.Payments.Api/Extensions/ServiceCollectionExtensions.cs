@@ -101,6 +101,7 @@
 
                         // Durable outbox
                         opts.Policies.UseDurableOutboxOnAllSendingEndpoints();
+                        opts.Policies.UseDurableInboxOnAllListeners();
 
                         // CONFIGURAÇÃO RPC PARA RECEBER CHARGE PAYMENT REQUESTS
                         // O serviço de pagamentos ouve a fila de requisições e automaticamente responde
@@ -121,6 +122,7 @@
 
                         // Durable outbox for all sending endpoints
                         opts.Policies.UseDurableOutboxOnAllSendingEndpoints();
+                        opts.Policies.UseDurableInboxOnAllListeners();
 
                         // CONFIGURAÇÃO RPC PARA AZURE SERVICE BUS
                         opts.ListenToAzureServiceBusQueue("charge-payment-queue")
