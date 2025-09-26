@@ -22,7 +22,7 @@ namespace TC.CloudGames.Payments.Domain.Aggregates
         public static Result<PaymentAggregate> CreateFromPrimitives(Guid id, Guid userId, Guid gameId, string gameName, decimal amount, bool isApproved, string? errorMessage)
         {
             var aggregate = new PaymentAggregate(id);
-            var @event = new PaymentStatusUpdateDomainEvent(aggregate.Id, userId, gameId, gameName, amount, isApproved, errorMessage, DateTimeOffset.UtcNow);
+            var @event = new PaymentStatusUpdateDomainEvent(aggregate.Id, userId, gameId, gameName, amount, isApproved, errorMessage);
             aggregate.ApplyEvent(@event);
             return Result<PaymentAggregate>.Success(aggregate);
         }
@@ -58,6 +58,6 @@ namespace TC.CloudGames.Payments.Domain.Aggregates
             decimal Amount,
             bool Success,
             string? ErrorMessage,
-            DateTimeOffset OccurredOn) : BaseDomainEvent(AggregateId, OccurredOn);
+            DateTimeOffset OccurredOn = default) : BaseDomainEvent(AggregateId, OccurredOn == default ? DateTimeOffset.UtcNow : OccurredOn);
     }
 }

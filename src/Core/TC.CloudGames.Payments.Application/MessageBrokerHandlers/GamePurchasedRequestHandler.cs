@@ -18,20 +18,20 @@ namespace TC.CloudGames.Payments.Application.MessageBrokerHandlers
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public async Task HandleAsync(EventContext<GamePurchasedIntegrationEvent> @event, IMessageContext context, CancellationToken cancellationToken = default)
+        public async Task HandleAsync(EventContext<GamePurchasedIntegrationEvent> @event, CancellationToken cancellationToken = default)
         {
             try
             {
-                //1. Map evento to aggregate
+                //1. Map event to domain aggregate
                 var aggregate = MapEventToAggregate(@event, isApproved: true, errorMessage: null);
 
-                //2. Persist aggregate events
+                //2. Persist domain aggregate 
                 await _paymentRepository.SaveAsync(aggregate, cancellationToken).ConfigureAwait(false);
 
-                //3. Publish integration events
+                //3. Publish payment integration event to game api
                 await PublishIntegrationEventsAsync(aggregate, @event).ConfigureAwait(false);
 
-                //4. Commit transaction
+                //4. Commit transaction with outbox pattern
                 await _paymentRepository.CommitAsync(aggregate, cancellationToken).ConfigureAwait(false);
 
                 _logger.LogInformation("Purchase charged completed successfully for User {UserId}, Game {GameId}", @event.UserId, aggregate.GameId);
@@ -58,22 +58,23 @@ namespace TC.CloudGames.Payments.Application.MessageBrokerHandlers
             );
         }
 
-        private static GamePaymentStatusUpdateIntegrationEvent ToIntegrationEvent(PaymentAggregate.PaymentStatusUpdateDomainEvent domainEvent)
+        private static GamePaymentStatusUpdateIntegrationEvent ToIntegrationEvent(PaymentAggregate.PaymentStatusUpdateDomainEvent domainEvent, Guid aggregateId)
         => new(
-             PaymentId: domainEvent.AggregateId,
-             UserId: domainEvent.UserId,
-             GameId: domainEvent.GameId,
-             Status: domainEvent.Success? "Charged" : "Not Charged",
-             Success: domainEvent.Success,
-             ErrorMessage: domainEvent.ErrorMessage,
-             OccurredOn: DateTimeOffset.UtcNow
+                AggregateId: aggregateId, //UserGameLibraryAggregate Id
+                UserId: domainEvent.UserId,
+                GameId: domainEvent.GameId,
+                PaymentId: domainEvent.AggregateId,
+                Status: domainEvent.Success ? "Charged" : "Not Charged",
+                Success: domainEvent.Success,
+                ErrorMessage: domainEvent.ErrorMessage,
+                OccurredOn: DateTimeOffset.UtcNow
             );
 
         protected async Task PublishIntegrationEventsAsync(PaymentAggregate aggregate, EventContext<GamePurchasedIntegrationEvent> @event)
         {
             var mappings = new Dictionary<Type, Func<BaseDomainEvent, GamePaymentStatusUpdateIntegrationEvent>>
             {
-                { typeof(PaymentAggregate.PaymentStatusUpdateDomainEvent), e => ToIntegrationEvent((PaymentAggregate.PaymentStatusUpdateDomainEvent)e) }
+                { typeof(PaymentAggregate.PaymentStatusUpdateDomainEvent), e => ToIntegrationEvent((PaymentAggregate.PaymentStatusUpdateDomainEvent)e, @event.EventData.AggregateId) }
             };
 
             var integrationEvents = aggregate.UncommittedEvents
