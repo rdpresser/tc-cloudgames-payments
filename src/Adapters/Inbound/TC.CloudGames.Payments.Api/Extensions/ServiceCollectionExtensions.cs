@@ -1,4 +1,8 @@
-﻿namespace TC.CloudGames.Payments.Api.Extensions
+﻿using Azure.Messaging.ServiceBus.Administration;
+using TC.CloudGames.Contracts.Events.Payments;
+using TC.CloudGames.SharedKernel.Infrastructure.Messaging;
+
+namespace TC.CloudGames.Payments.Api.Extensions
 {
     internal static class ServiceCollectionExtensions
     {
@@ -62,8 +66,9 @@
             builder.Host.UseWolverine(opts =>
             {
                 opts.UseSystemTextJsonForSerialization();
-                opts.Discovery.IncludeAssembly(typeof(ChargePaymentRequestHandler).Assembly);
-                Console.WriteLine($"Handler discovery: {opts.DescribeHandlerMatch(typeof(ChargePaymentRequestHandler))}");
+                opts.ApplicationAssembly = typeof(Program).Assembly;
+                opts.Discovery.IncludeAssembly(typeof(GamePurchasedRequestHandler).Assembly);
+                Console.WriteLine($"Handler discovery: {opts.DescribeHandlerMatch(typeof(GamePurchasedRequestHandler))}");
 
                 // -------------------------------
                 // Define schema for Wolverine durability and Postgres persistence
@@ -103,11 +108,18 @@
                         opts.Policies.UseDurableOutboxOnAllSendingEndpoints();
                         opts.Policies.UseDurableInboxOnAllListeners();
 
-                        // CONFIGURAÇÃO RPC PARA RECEBER CHARGE PAYMENT REQUESTS
-                        // O serviço de pagamentos ouve a fila de requisições e automaticamente responde
-                        opts.ListenToRabbitQueue("charge-payment-queue", configure =>
+                        var exchangeName = $"{mq.Exchange}-exchange";
+                        // Register messages
+                        opts.PublishMessage<EventContext<GamePaymentStatusUpdateIntegrationEvent>>()
+                            .ToRabbitExchange(exchangeName)
+                            .BufferedInMemory()
+                            .UseDurableOutbox();
+
+                        // Declara fila para eventos de Games
+                        opts.ListenToRabbitQueue($"payments.{mq.ListenGameExchange}-queue", configure =>
                         {
-                            configure.IsDurable = true;
+                            configure.IsDurable = mq.Durable;
+                            configure.BindExchange(exchangeName: $"{mq.ListenGameExchange}-exchange");
                         })
                         .UseDurableInbox();
 
@@ -124,11 +136,35 @@
                         opts.Policies.UseDurableOutboxOnAllSendingEndpoints();
                         opts.Policies.UseDurableInboxOnAllListeners();
 
-                        // CONFIGURAÇÃO RPC PARA AZURE SERVICE BUS
-                        opts.ListenToAzureServiceBusQueue("charge-payment-queue")
-                            .UseDurableInbox();
-
                         opts.RegisterPaymentEvents();
+
+                        // GAMES API EVENTS -------------------------------
+                        opts.RegisterGameEvents();
+
+                        var topicName = $"{sb.TopicName}-topic";
+                        opts.PublishMessage<EventContext<GamePaymentStatusUpdateIntegrationEvent>>()
+                            .ToAzureServiceBusTopic(topicName)
+                            .CustomizeOutgoing(e => e.Headers["DomainAggregate"] = "PaymentAggregate")
+                            .BufferedInMemory()
+                            .UseDurableOutbox();
+
+                        // Declare subscription for PAYMENT events
+                        opts.ListenToAzureServiceBusSubscription(
+                            subscriptionName: $"payments.{sb.GamesTopicName}-subscription",
+                            configureSubscriptions: configure =>
+                            {
+                                configure.TopicName = $"{sb.GamesTopicName}-topic";
+                                configure.MaxDeliveryCount = sb.MaxDeliveryCount;
+                                configure.DeadLetteringOnMessageExpiration = sb.EnableDeadLettering;
+                            },
+                            configureSubscriptionRule: configure =>
+                            {
+                                configure.Name = "PaymentsDomainAggregateFilter";
+                                configure.Filter = new SqlRuleFilter("DomainAggregate = 'GameAggregate'");
+                            })
+                        .FromTopic($"{sb.GamesTopicName}-topic")
+                        .UseDurableInbox();
+
                         break;
                 }
 
