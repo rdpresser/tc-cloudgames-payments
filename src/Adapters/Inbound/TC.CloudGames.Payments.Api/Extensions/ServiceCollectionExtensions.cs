@@ -1,6 +1,5 @@
 ﻿using Azure.Messaging.ServiceBus.Administration;
-using ImTools;
-using JasperFx.Events.Projections;
+using Marten.Events.Projections;
 using TC.CloudGames.Contracts.Events.Payments;
 using TC.CloudGames.SharedKernel.Infrastructure.Messaging;
 
@@ -215,11 +214,9 @@ namespace TC.CloudGames.Payments.Api.Extensions
                         .ConnectionLimit(-1);
                 });
 
-                // -------------------------------
-                // Configuração do PaymentAggregate
-                // -------------------------------
-                options.Projections.AggregatorFor<PaymentAggregate>();
-                
+                // Snapshot automático do aggregate (para acelerar LoadAsync)
+                options.Projections.Snapshot<PaymentAggregate>(SnapshotLifecycle.Inline);
+
                 return options;
             })
             .UseLightweightSessions()
