@@ -1,4 +1,6 @@
 ﻿using Azure.Messaging.ServiceBus.Administration;
+using ImTools;
+using JasperFx.Events.Projections;
 using TC.CloudGames.Contracts.Events.Payments;
 using TC.CloudGames.SharedKernel.Infrastructure.Messaging;
 
@@ -216,9 +218,8 @@ namespace TC.CloudGames.Payments.Api.Extensions
                 // -------------------------------
                 // Configuração do PaymentAggregate
                 // -------------------------------
-                options.Schema.For<PaymentAggregate>()
-                    .DatabaseSchemaName("documents");
-
+                options.Projections.AggregatorFor<PaymentAggregate>();
+                
                 return options;
             })
             .UseLightweightSessions()
