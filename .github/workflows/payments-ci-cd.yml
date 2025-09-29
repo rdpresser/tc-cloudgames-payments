@@ -22,7 +22,7 @@ on:
         type: boolean
 
 env:
-  SERVICE_NAME: payments-api
+  SERVICE_NAME: payms-api
   SOLUTION_PATH: services/payments/TC.CloudGames.Payments.sln
   SOLUTION_FILE: TC.CloudGames.Payments.sln
   SERVICE_PATH: services/payments
@@ -188,7 +188,7 @@ jobs:
     needs: [unit-tests, unit-tests-skipped, get-foundation-outputs]
     if: always() && needs.get-foundation-outputs.result == 'success' && (needs.unit-tests.result == 'success' || needs.unit-tests.result == 'skipped' || needs.unit-tests-skipped.result == 'success')
     with:
-      service-name: payments-api
+      service-name: payms-api
       workspace-path: tc-cloudgames-solution/services/payments
       dockerfile-path: services/payments/src/Adapters/Inbound/TC.CloudGames.Payments.Api/Dockerfile
       environment: ${{ github.event.inputs.environment || 'dev-rodrigo' }}
