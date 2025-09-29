@@ -1,0 +1,361 @@
+name: 🚀 Deploy Container App
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+      workspace-path:
+        required: true
+        type: string
+      dockerfile-path:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      acr-name:
+        required: true
+        type: string
+      key-vault-name:
+        required: true
+        type: string
+    secrets:
+      AZURE_CREDENTIALS:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      container-app-name: ${{ steps.container-app.outputs.container-app-name }}
+      container-app-url: ${{ steps.get-url.outputs.container-app-url }}
+      image-tag: ${{ steps.build-vars.outputs.image-tag }}
+      image-uri: ${{ steps.build-vars.outputs.image-uri }}
+    steps:
+
+      # 1️⃣ Prepare workspace
+      - name: 📂 Prepare workspace
+        run: mkdir -p ${{ inputs.workspace-path }}
+
+      # 2️⃣ Checkout repositories
+      - name: 📥 Checkout API repository
+        uses: actions/checkout@v4
+        with:
+          path: ${{ inputs.workspace-path }}
+
+      - name: 📥 Checkout shared repository
+        uses: actions/checkout@v4
+        with:
+          repository: rdpresser/tc-cloudgames-common
+          path: tc-cloudgames-solution/shared/common
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 3️⃣ Setup .NET
+      - name: ⚙️ Setup .NET 9.0
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      # 4️⃣ Azure Login
+      - name: 🔐 Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # 5️⃣ Prepare Build Variables
+      - name: 🏗️ Prepare Build Variables
+        id: build-vars
+        run: |
+          IMAGE_TAG="$(date +%Y%m%d-%H%M%S)-$(echo ${{ github.sha }} | cut -c1-8)"
+          IMAGE_URI="${{ inputs.acr-name }}.azurecr.io/${{ inputs.service-name }}:${IMAGE_TAG}"
+          IMAGE_URI_LATEST="${{ inputs.acr-name }}.azurecr.io/${{ inputs.service-name }}:latest"
+
+          echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "image-uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "image-uri-latest=$IMAGE_URI_LATEST" >> $GITHUB_OUTPUT
+        shell: bash
+
+      # 6️⃣ Login to ACR (for Docker build/push)
+      - name: 🐳 Login to Azure Container Registry
+        run: az acr login --name ${{ inputs.acr-name }}
+        shell: bash
+
+      # 7️⃣ Setup Docker Buildx
+      - name: ⚙️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 8️⃣ Build and push Docker image
+      - name: 🏗️ Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        id: build-push
+        with:
+          context: ./tc-cloudgames-solution
+          file: ./tc-cloudgames-solution/${{ inputs.dockerfile-path }}
+          push: true
+          tags: |
+            ${{ steps.build-vars.outputs.image-uri }}
+            ${{ steps.build-vars.outputs.image-uri-latest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      # 9️⃣ Get Container App info
+      - name: 🔎 Get Container App Info
+        id: container-app
+        run: |
+          CONTAINER_APP_INFO=$(az containerapp list \
+            --query "[?contains(name, '${{ inputs.service-name }}')].[name, resourceGroup]" -o tsv | head -1)
+          if [ -z "$CONTAINER_APP_INFO" ]; then
+            echo "Container App not found"; exit 1
+          fi
+          CONTAINER_APP_NAME=$(echo "$CONTAINER_APP_INFO" | awk '{print $1}')
+          RESOURCE_GROUP=$(echo "$CONTAINER_APP_INFO" | awk '{print $2}')
+
+          echo "container-app-name=$CONTAINER_APP_NAME" >> $GITHUB_OUTPUT
+          echo "resource-group=$RESOURCE_GROUP" >> $GITHUB_OUTPUT
+        shell: bash
+
+      # 🔟 Verify Image Exists in ACR Before Deploy
+      - name: � Verify Image Exists in ACR Before Deploy
+        run: |
+          IMAGE_URI_LATEST="${{ steps.build-vars.outputs.image-uri-latest }}"
+          
+          echo "🔍 Verifying image exists in ACR before creating new revision..."
+          echo "📦 Checking image: $IMAGE_URI_LATEST"
+          
+          # Wait for potential manifest propagation (ACR can have some delay)
+          echo "⏳ Waiting 30 seconds for manifest propagation..."
+          sleep 30
+          
+          # Verify the image exists in ACR before attempting deploy
+          MAX_RETRIES=5
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            echo "🔍 Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES: Checking if image exists..."
+            
+            if az acr repository show-manifests \
+              --name ${{ inputs.acr-name }} \
+              --repository ${{ inputs.service-name }} \
+              --query "[?contains(tags, 'latest')]" -o tsv > /dev/null 2>&1; then
+              echo "✅ Image verified in ACR! Proceeding with deployment."
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "⏳ Image not found yet, waiting 15 seconds before retry..."
+                sleep 15
+              else
+                echo "❌ ERROR: Image not found in ACR after $MAX_RETRIES attempts"
+                echo "❌ Cannot proceed with deployment - image $IMAGE_URI_LATEST does not exist"
+                exit 1
+              fi
+            fi
+          done
+        shell: bash
+
+      # 1️⃣1️⃣ Verify RBAC Permissions Before Deploy
+      - name: 🔐 Verify Container App has ACR Pull permissions
+        run: |
+          echo "🔍 Verifying Container App System Identity has AcrPull permissions..."
+          
+          CONTAINER_APP_NAME="${{ steps.container-app.outputs.container-app-name }}"
+          RESOURCE_GROUP="${{ steps.container-app.outputs.resource-group }}"
+          ACR_NAME="${{ inputs.acr-name }}"
+          
+          # Get Container App System Identity Principal ID
+          PRINCIPAL_ID=$(az containerapp show \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "identity.principalId" -o tsv)
+          
+          if [ -z "$PRINCIPAL_ID" ] || [ "$PRINCIPAL_ID" = "null" ]; then
+            echo "❌ ERROR: Container App does not have System Managed Identity configured"
+            exit 1
+          fi
+          
+          echo "📋 Container App System Identity: $PRINCIPAL_ID"
+          
+          # Get ACR Resource ID for scope verification
+          ACR_SCOPE=$(az acr show --name "$ACR_NAME" --query "id" -o tsv)
+          echo "📋 ACR Scope: $ACR_SCOPE"
+          
+          # Check if Container App Identity has AcrPull role on ACR
+          echo "🔍 Checking AcrPull role assignment..."
+          ROLE_ASSIGNMENTS=$(az role assignment list \
+            --assignee "$PRINCIPAL_ID" \
+            --scope "$ACR_SCOPE" \
+            --query "[?roleDefinitionName=='AcrPull'].{role:roleDefinitionName,scope:scope}" -o tsv)
+          
+          if [ -z "$ROLE_ASSIGNMENTS" ]; then
+            echo "❌ ERROR: Container App System Identity does not have AcrPull permissions on ACR"
+            echo "❌ This should be configured by Terraform. Please check:"
+            echo "   1. Terraform apply completed successfully"
+            echo "   2. RBAC propagation wait time is sufficient"
+            echo "   3. Role assignment exists in Azure portal"
+            echo ""
+            echo "🔧 Manual fix (emergency only):"
+            echo "   az role assignment create --assignee $PRINCIPAL_ID --role AcrPull --scope $ACR_SCOPE"
+            exit 1
+          fi
+          
+          echo "✅ Container App System Identity has AcrPull permissions!"
+          echo "📋 Role Assignment: $ROLE_ASSIGNMENTS"
+          
+          # Additional verification: Test ACR access
+          echo "🧪 Testing ACR authentication..."
+          if az acr repository list --name "$ACR_NAME" --output none 2>/dev/null; then
+            echo "✅ ACR authentication test passed"
+          else
+            echo "⚠️ Warning: Could not test ACR authentication (may be normal for GitHub Actions runner)"
+          fi
+        shell: bash
+
+      # 1️⃣2️⃣ Setup Container App Secrets from Key Vault
+      - name: 🔐 Setup Container App Secrets from Key Vault
+        run: |
+          echo "🔐 Setting up Container App secrets from Key Vault..."
+          
+          CONTAINER_APP_NAME="${{ steps.container-app.outputs.container-app-name }}"
+          RESOURCE_GROUP="${{ steps.container-app.outputs.resource-group }}"
+          KEY_VAULT_NAME="${{ inputs.key-vault-name }}"
+          
+          echo "📋 Container App: $CONTAINER_APP_NAME"
+          echo "📋 Resource Group: $RESOURCE_GROUP"
+          echo "📋 Key Vault: $KEY_VAULT_NAME"
+          
+          # Create/Update secrets in Container App using Key Vault references
+          echo "🔄 Setting up Container App secrets..."
+          
+          # Database secrets
+          az containerapp secret set --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --secrets \
+              "db-host=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/db-host,identityref:system" \
+              "db-port=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/db-port,identityref:system" \
+              "db-name-payments=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/db-name-payments,identityref:system" \
+              "db-admin-login=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/db-admin-login,identityref:system" \
+              "db-password=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/db-password,identityref:system" \
+              "db-name-maintenance=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/db-name-maintenance,identityref:system" \
+              "db-schema=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/db-schema,identityref:system" \
+              "db-connection-timeout=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/db-connection-timeout,identityref:system"
+          
+          # Cache secrets
+          az containerapp secret set --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --secrets \
+              "cache-host=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/cache-host,identityref:system" \
+              "cache-port=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/cache-port,identityref:system" \
+              "cache-password=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/cache-password,identityref:system" \
+              "cache-secure=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/cache-secure,identityref:system" \
+              "cache-payments-instance-name=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/cache-payments-instance-name,identityref:system"
+          
+          # Service Bus secrets
+          az containerapp secret set --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --secrets \
+              "servicebus-connection-string=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-connection-string,identityref:system" \
+              "servicebus-auto-provision=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-auto-provision,identityref:system" \
+              "servicebus-max-delivery-count=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-max-delivery-count,identityref:system" \
+              "servicebus-enable-dead-lettering=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-enable-dead-lettering,identityref:system" \
+              "servicebus-auto-purge-on-startup=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-auto-purge-on-startup,identityref:system" \
+              "servicebus-use-control-queues=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-use-control-queues,identityref:system" \
+              "servicebus-payments-topic-name=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-payments-topic-name,identityref:system"
+          
+          echo "✅ Container App secrets setup completed!"
+        shell: bash
+
+      # 1️⃣3️⃣ Deploy to Azure Container App using Azure CLI
+      - name: 🚀 Deploy to Azure Container App
+        run: |
+          echo "🚀 Deploying Container App using System Managed Identity..."
+          
+          CONTAINER_APP_NAME="${{ steps.container-app.outputs.container-app-name }}"
+          RESOURCE_GROUP="${{ steps.container-app.outputs.resource-group }}"
+          IMAGE_URI="${{ steps.build-vars.outputs.image-uri }}"
+          
+          echo "📋 Container App: $CONTAINER_APP_NAME"
+          echo "📋 Resource Group: $RESOURCE_GROUP"
+          echo "📋 Image: $IMAGE_URI"
+          
+          # Update container app with new image and environment variables using System Identity
+          echo "🔄 Updating Container App with new revision..."
+          az containerapp update \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$IMAGE_URI" \
+            --set-env-vars \
+              ASPNETCORE_ENVIRONMENT=Production \
+              ASPNETCORE_URLS=http://+:8080 \
+              DB_HOST=secretref:db-host \
+              DB_PORT=secretref:db-port \
+              DB_NAME=secretref:db-name-payments \
+              DB_USER=secretref:db-admin-login \
+              DB_PASSWORD=secretref:db-password \
+              DB_MAINTENANCE_NAME=secretref:db-name-maintenance \
+              DB_SCHEMA=secretref:db-schema \
+              DB_CONNECTION_TIMEOUT=secretref:db-connection-timeout \
+              CACHE_HOST=secretref:cache-host \
+              CACHE_PORT=secretref:cache-port \
+              CACHE_PASSWORD=secretref:cache-password \
+              CACHE_SECURE=secretref:cache-secure \
+              AZURE_SERVICEBUS_CONNECTIONSTRING=secretref:servicebus-connection-string \
+              AZURE_SERVICEBUS_AUTO_PROVISION=secretref:servicebus-auto-provision \
+              AZURE_SERVICEBUS_MAX_DELIVERY_COUNT=secretref:servicebus-max-delivery-count \
+              AZURE_SERVICEBUS_ENABLE_DEAD_LETTERING=secretref:servicebus-enable-dead-lettering \
+              AZURE_SERVICEBUS_AUTO_PURGE_ON_STARTUP=secretref:servicebus-auto-purge-on-startup \
+              AZURE_SERVICEBUS_USE_CONTROL_QUEUES=secretref:servicebus-use-control-queues \
+              AZURE_SERVICEBUS_TOPIC_NAME=secretref:servicebus-payments-topic-name \
+              CACHE_INSTANCE_NAME=secretref:cache-payments-instance-name
+
+          echo "✅ Container App deployment completed successfully!"
+          echo "🔍 Checking deployment status..."
+          
+          # Verify the deployment
+          DEPLOYMENT_STATUS=$(az containerapp revision list \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "[0].properties.healthState" -o tsv)
+          
+          echo "📋 Latest revision health state: $DEPLOYMENT_STATUS"
+          
+          if [ "$DEPLOYMENT_STATUS" = "Healthy" ]; then
+            echo "✅ Deployment successful - Container App is healthy!"
+          else
+            echo "⚠️ Deployment completed but health state is: $DEPLOYMENT_STATUS"
+            echo "🔍 Checking revision details..."
+            az containerapp revision list \
+              --name "$CONTAINER_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --query "[0].{name: name, healthState: properties.healthState, replicas: properties.replicas}" -o table
+          fi
+          
+        shell: bash
+
+      # 1️⃣4️⃣ Get Container App URL
+      - name: 🌐 Get Container App URL
+        id: get-url
+        run: |
+          APP_URL=$(az containerapp show \
+            --name "${{ steps.container-app.outputs.container-app-name }}" \
+            --resource-group "${{ steps.container-app.outputs.resource-group }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "container-app-url=https://$APP_URL" >> $GITHUB_OUTPUT
+          echo "🌐 Container App URL: https://$APP_URL"
+        shell: bash
+
+      # 1️⃣5️⃣ Health check
+      - name: 🧪 Health Check
+        shell: bash
+        run: |
+          HEALTH_URL="${{ steps.get-url.outputs.container-app-url }}/health"
+          sleep 20
+          for i in {1..3}; do
+            if curl -fsS "$HEALTH_URL" > /dev/null 2>&1; then
+              echo "✅ Health check passed!"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "❌ Health check failed after 3 attempts"
+          exit 1
