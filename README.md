@@ -6,6 +6,7 @@ The Payments microservice is responsible for processing financial transactions, 
 
 This service follows **Hexagonal Architecture (Ports & Adapters)** with **Domain-Driven Design (DDD)** and **Event-Driven Architecture**:
 
+````
 TC.CloudGames.Payments/
 ├── 🎯 Core/ # Business Logic
 │ ├── Domain/ # Domain Layer
@@ -21,7 +22,7 @@ TC.CloudGames.Payments/
 │ └── TC.CloudGames.Payments.Infrastructure/ # Database & Repositories
 └── 🧪 test/ # Test Suite (Planned)
 └── TC.CloudGames.Payments.Unit.Tests/
-
+````
 
 ## 🎯 Domain Model
 
@@ -229,24 +230,26 @@ public class GamePurchasedRequestHandler
 - **PaymentFailedIntegrationEvent**: Payment processing failed
 - **RefundProcessedIntegrationEvent**: Refund successfully processed
 
-### Event Flow
+
+## 💰 Payment Processing Workflow
 
 ```mermaid
 sequenceDiagram
-    participant Games as Games Service
-    participant Payments as Payments Service
-    participant Gateway as Payment Gateway
-    participant Users as Users Service
+    participant User as Frontend/User
+    participant Games as Games API
+    participant Payments as Payments API
+    participant DB as Games DB
+    participant Bus as Wolverine/EventBus
 
-    Games->>Payments: GamePurchasedIntegrationEvent
-    Payments->>Gateway: Process Payment
-    Gateway-->>Payments: Payment Response
-    Payments->>Payments: Create PaymentAggregate
-    Payments->>Games: PaymentProcessedIntegrationEvent
-    Payments->>Users: Update User Balance
+    User->>Games: POST /games/purchase {UserId, GameId, PaymentMethod}
+    Games->>Games: Validate GameId and check ownership
+    Games->>Payments: POST /payments/charge {UserId, GameId, Amount, PaymentMethod}
+    Payments-->>Games: {status: success, paymentId}
+    Games->>DB: Create UserGameLibrary record (UserId + GameId + PurchaseDate)
+    Games-->>User: 200 OK {UserId, GameId, PurchaseDate, PaymentId}
+    Games->>Bus: GamePurchasedIntegrationEvent {UserId, GameId, PurchaseDate, PaymentId}
 ```
 
-## 💰 Payment Processing Workflow
 
 ### 1. Payment Initiation
 - User initiates game purchase
