@@ -12,7 +12,7 @@
                     if (authHeader?.StartsWith("Bearer ") == true)
                     {
                         var token = authHeader.Substring("Bearer ".Length).Trim();
-                        var expectedToken = Environment.GetEnvironmentVariable("GRAFANA_PROMETHEUS_TOKEN");
+                        var expectedToken = Environment.GetEnvironmentVariable("GRAFANA_OTEL_PROMETHEUS_API_TOKEN");
 
                         if (token == expectedToken)
                         {
