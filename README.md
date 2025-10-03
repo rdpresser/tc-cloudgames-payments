@@ -232,23 +232,34 @@ public class GamePurchasedRequestHandler
 
 
 ## 💰 Payment Processing Workflow
-
 ```mermaid
 sequenceDiagram
     participant User as Frontend/User
     participant Games as Games API
+    participant WGames as Wolverine (Games)
+    participant Bus as RabbitMQ/ServiceBus
+    participant WPayments as Wolverine (Payments)
     participant Payments as Payments API
     participant DB as Games DB
-    participant Bus as Wolverine/EventBus
+    participant EventBus as EventBus (Wolverine)
 
     User->>Games: POST /games/purchase {UserId, GameId, PaymentMethod}
-    Games->>Games: Validate GameId and check ownership
-    Games->>Payments: POST /payments/charge {UserId, GameId, Amount, PaymentMethod}
-    Payments-->>Games: {status: success, paymentId}
-    Games->>DB: Create UserGameLibrary record (UserId + GameId + PurchaseDate)
+    Games->>Games: Validate GameId exists
+    Games->>Games: Check if User already owns GameId
+    Games-->>User: 400 BadRequest (if validation fails)
+    Games->>WGames: Invoke ChargePaymentRequest {UserId, GameId, Amount, PaymentMethod}
+    WGames->>Bus: Publish ChargePaymentRequest (correlationId)
+    Bus->>WPayments: Deliver ChargePaymentRequest
+    WPayments->>Payments: POST /payments/charge {UserId, GameId, Amount, PaymentMethod}
+    Payments-->>WPayments: {status: success, paymentId}
+    WPayments->>Bus: Publish ChargePaymentResponse {status, paymentId, correlationId}
+    Bus->>WGames: Deliver ChargePaymentResponse (match correlationId)
+    WGames-->>Games: Return ChargePaymentResponse
+    Games->>DB: Insert UserGameLibrary {UserId, GameId, PurchaseDate, PaymentId}
     Games-->>User: 200 OK {UserId, GameId, PurchaseDate, PaymentId}
-    Games->>Bus: GamePurchasedIntegrationEvent {UserId, GameId, PurchaseDate, PaymentId}
+    Games->>EventBus: GamePurchasedIntegrationEvent {UserId, GameId, GameName, PurchaseDate, PaymentId}
 ```
+
 
 
 ### 1. Payment Initiation
