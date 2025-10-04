@@ -17,11 +17,6 @@ namespace TC.CloudGames.Payments.Api.Extensions
             app.UseHttpsRedirection()
                 .UseCustomExceptionHandler()
                 .UseCorrelationMiddleware()
-
-                //***************** ADICIONAR **************************************************/
-                //.UseMiddleware<TelemetryMiddleware>() // Add telemetry middleware after correlation
-                //******************************************************************************/
-
                 .UseSerilogRequestLogging()
                 .UseHealthChecks("/health", new HealthCheckOptions
                 {
@@ -37,13 +32,10 @@ namespace TC.CloudGames.Payments.Api.Extensions
                 {
                     Predicate = check => check.Tags.Contains("live"),
                     ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
-                });
-
-            // Add Prometheus metrics endpoint
-            //***************** ADICIONAR **************************************************/
-            //.UseOpenTelemetryPrometheusScrapingEndpoint("/metrics")
-            //******************************************************************************/
-
+                })
+                // Add Prometheus metrics endpoint
+                .UseOpenTelemetryPrometheusScrapingEndpoint("/metrics");
+            
             return app;
         }
 

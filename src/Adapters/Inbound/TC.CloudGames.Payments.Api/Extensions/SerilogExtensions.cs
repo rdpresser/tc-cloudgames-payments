@@ -1,6 +1,4 @@
-﻿using TC.CloudGames.Payments.Api.Telemetry;
-
-namespace TC.CloudGames.Payments.Api.Extensions
+﻿namespace TC.CloudGames.Payments.Api.Extensions
 {
     [ExcludeFromCodeCoverage]
     internal static class SerilogExtensions
