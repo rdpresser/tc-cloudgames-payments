@@ -262,6 +262,16 @@ jobs:
               "servicebus-use-control-queues=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-use-control-queues,identityref:system" \
               "servicebus-payments-topic-name=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-payments-topic-name,identityref:system"
           
+          # Grafana OpenTelemetry secrets
+          az containerapp secret set --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --secrets \
+              "grafana-logs-api-token=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/grafana-logs-api-token,identityref:system" \
+              "grafana-otel-prometheus-api-token=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/grafana-otel-prometheus-api-token,identityref:system" \
+              "grafana-otel-payments-resource-attributes=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/grafana-otel-payments-resource-attributes,identityref:system" \
+              "grafana-otel-exporter-endpoint=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/grafana-otel-exporter-endpoint,identityref:system" \
+              "grafana-otel-exporter-protocol=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/grafana-otel-exporter-protocol,identityref:system" \
+              "grafana-otel-auth-header=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/grafana-otel-auth-header,identityref:system"
+
           echo "✅ Container App secrets setup completed!"
         shell: bash
 
@@ -306,7 +316,13 @@ jobs:
               AZURE_SERVICEBUS_AUTO_PURGE_ON_STARTUP=secretref:servicebus-auto-purge-on-startup \
               AZURE_SERVICEBUS_USE_CONTROL_QUEUES=secretref:servicebus-use-control-queues \
               AZURE_SERVICEBUS_TOPIC_NAME=secretref:servicebus-payments-topic-name \
-              CACHE_INSTANCE_NAME=secretref:cache-payments-instance-name
+              CACHE_INSTANCE_NAME=secretref:cache-payments-instance-name \
+              GRAFANA_LOGS_API_TOKEN=secretref:grafana-logs-api-token \
+              GRAFANA_OTEL_PROMETHEUS_API_TOKEN=secretref:grafana-otel-prometheus-api-token \
+              OTEL_RESOURCE_ATTRIBUTES=secretref:grafana-otel-payments-resource-attributes \
+              OTEL_EXPORTER_OTLP_ENDPOINT=secretref:grafana-otel-exporter-endpoint \
+              OTEL_EXPORTER_OTLP_PROTOCOL=secretref:grafana-otel-exporter-protocol \
+              OTEL_EXPORTER_OTLP_HEADERS=secretref:grafana-otel-auth-header
 
           echo "✅ Container App deployment completed successfully!"
           echo "🔍 Checking deployment status..."
