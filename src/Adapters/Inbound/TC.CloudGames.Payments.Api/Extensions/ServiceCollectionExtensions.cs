@@ -312,7 +312,7 @@ namespace TC.CloudGames.Payments.Api.Extensions
                             },
                             configureSubscriptionRule: configure =>
                             {
-                                configure.Name = "PaymentsDomainAggregateFilter";
+                                configure.Name = "GamesDomainAggregateFilter";
                                 configure.Filter = new SqlRuleFilter("DomainAggregate = 'GameAggregate'");
                             })
                         .FromTopic($"{sb.GamesTopicName}-topic")
