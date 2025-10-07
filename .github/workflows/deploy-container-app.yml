@@ -204,14 +204,6 @@ jobs:
           
           echo "✅ Container App System Identity has AcrPull permissions!"
           echo "📋 Role Assignment: $ROLE_ASSIGNMENTS"
-          
-          # Additional verification: Test ACR access
-          echo "🧪 Testing ACR authentication..."
-          if az acr repository list --name "$ACR_NAME" --output none 2>/dev/null; then
-            echo "✅ ACR authentication test passed"
-          else
-            echo "⚠️ Warning: Could not test ACR authentication (may be normal for GitHub Actions runner)"
-          fi
         shell: bash
 
       # 1️⃣2️⃣ Setup Container App Secrets from Key Vault
@@ -273,6 +265,63 @@ jobs:
               "grafana-otel-auth-header=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/grafana-otel-auth-header,identityref:system"
 
           echo "✅ Container App secrets setup completed!"
+        shell: bash
+
+      # 1️⃣2️⃣.5️⃣ Configure Container App Registry (ACR)
+      - name: 🐳 Configure Container App Registry
+        run: |
+          echo "🐳 Configuring Container App registry for ACR access..."
+          
+          CONTAINER_APP_NAME="${{ steps.container-app.outputs.container-app-name }}"
+          RESOURCE_GROUP="${{ steps.container-app.outputs.resource-group }}"
+          ACR_SERVER="${{ inputs.acr-name }}.azurecr.io"
+          
+          echo "📋 Container App: $CONTAINER_APP_NAME"
+          echo "📋 Resource Group: $RESOURCE_GROUP"
+          echo "📋 ACR Server: $ACR_SERVER"
+          
+          # Check if registry is already configured
+          echo "🔍 Checking current registry configuration..."
+          EXISTING_REGISTRY=$(az containerapp show \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "properties.configuration.registries[?server=='$ACR_SERVER'].server" -o tsv 2>/dev/null || echo "")
+          
+          if [ -n "$EXISTING_REGISTRY" ]; then
+            echo "✅ Registry already configured for $ACR_SERVER"
+            echo "🔄 Updating registry configuration to ensure correct identity..."
+            # Update anyway to ensure identity is correct (idempotent operation)
+            az containerapp registry set \
+              --name "$CONTAINER_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --server "$ACR_SERVER" \
+              --identity system
+            echo "✅ Registry configuration updated successfully!"
+          else
+            echo "🆕 Registry not configured yet, adding configuration..."
+            az containerapp registry set \
+              --name "$CONTAINER_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --server "$ACR_SERVER" \
+              --identity system
+            echo "✅ Registry configuration added successfully!"
+          fi
+          
+          # Verify final registry configuration
+          echo "🔍 Verifying final registry configuration..."
+          REGISTRY_CONFIG=$(az containerapp show \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "properties.configuration.registries[?server=='$ACR_SERVER'].{server:server,identity:identity}" -o json)
+          
+          if [ "$REGISTRY_CONFIG" != "[]" ] && [ "$REGISTRY_CONFIG" != "null" ]; then
+            echo "✅ Registry configuration verified successfully!"
+            echo "📋 Registry Configuration: $REGISTRY_CONFIG"
+          else
+            echo "❌ Registry configuration verification failed!"
+            echo "📋 All registries: $(az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" --query "properties.configuration.registries" -o json)"
+            exit 1
+          fi
         shell: bash
 
       # 1️⃣3️⃣ Deploy to Azure Container App using Azure CLI
