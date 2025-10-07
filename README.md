@@ -149,35 +149,20 @@ git clone https://github.com/rdpresser/tc-cloudgames-payments.git
 cd tc-cloudgames-payments
 ```
 
-2. **Start dependencies**
-```bash
-# Start PostgreSQL and RabbitMQ via Docker
-docker-compose up -d postgres rabbitmq
-```
-
-3. **Configure connection strings**
+2. **Configure connection strings**
 ```bash
 # Update appsettings.Development.json with your connection strings
 ```
 
-4. **Run the application**
+3. **Run the application**
 ```bash
 cd src/Adapters/Inbound/TC.CloudGames.Payments.Api
 dotnet run
 ```
 
-5. **Access the API**
-- API: `https://localhost:7001`
-- Swagger UI: `https://localhost:7001/swagger`
+4. **Access the API**
 - Health Checks: `https://localhost:7001/health`
 
-### Docker Deployment
-
-```bash
-# Build and run with Docker
-docker build -t tc-payments-api .
-docker run -p 8080:8080 tc-payments-api
-```
 
 ## 🔄 Message Flow
 
@@ -199,18 +184,10 @@ docker run -p 8080:8080 tc-payments-api
 dotnet test test/TC.CloudGames.Payments.Unit.Tests/
 ```
 
-### Integration Tests
-```bash
-# Run with test database
-dotnet test --configuration Release
-```
-
 ## 📊 Monitoring & Health Checks
 
 ### Health Endpoints
 - `/health`: Basic health check
-- `/health/ready`: Readiness probe for Kubernetes
-- `/health/live`: Liveness probe for Kubernetes
 
 ### Metrics & Observability
 - **OpenTelemetry**: Distributed tracing across payment operations
@@ -229,11 +206,6 @@ Production deployment on Azure with:
 - Azure Service Bus for messaging
 - Azure Database for PostgreSQL
 - Application Insights for monitoring
-
-## 📚 API Documentation
-
-### Payment Endpoints
-- `GET /health` - Service health status
 
 ## 📄 License
 
