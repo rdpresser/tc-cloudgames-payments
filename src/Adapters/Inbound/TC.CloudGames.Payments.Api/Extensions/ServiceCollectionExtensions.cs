@@ -1,15 +1,4 @@
-﻿using Azure.Messaging.ServiceBus.Administration;
-using Marten.Events.Projections;
-using Npgsql;
-using OpenTelemetry.Logs;
-using OpenTelemetry.Metrics;
-using OpenTelemetry.Resources;
-using OpenTelemetry.Trace;
-using TC.CloudGames.Contracts.Events.Payments;
-using TC.CloudGames.Payments.Api.Telemetry;
-using TC.CloudGames.SharedKernel.Infrastructure.Messaging;
-
-namespace TC.CloudGames.Payments.Api.Extensions
+﻿namespace TC.CloudGames.Payments.Api.Extensions
 {
     internal static class ServiceCollectionExtensions
     {
@@ -97,6 +86,8 @@ namespace TC.CloudGames.Payments.Api.Extensions
             var serviceVersion = typeof(Program).Assembly.GetName().Version?.ToString() ?? TelemetryConstants.Version;
             var environment = configuration["ASPNETCORE_ENVIRONMENT"] ?? "Development";
             var instanceId = Environment.MachineName;
+            var otlpEndpoint = configuration["OTEL_EXPORTER_OTLP_ENDPOINT"];
+            var otlpHeaders = configuration["OTEL_EXPORTER_OTLP_HEADERS"];
 
             services.AddOpenTelemetry()
                 .ConfigureResource(resource => resource
@@ -118,20 +109,31 @@ namespace TC.CloudGames.Payments.Api.Extensions
                         .AddAspNetCoreInstrumentation()
                         .AddHttpClientInstrumentation()
                         .AddRuntimeInstrumentation() // CPU, Memory, GC metrics
-                        .AddFusionCacheInstrumentation()
                         .AddNpgsqlInstrumentation()
-                        // Built-in meters for system metrics
+                        .AddFusionCacheInstrumentation()
+                        // Custom meters (app + Wolverine + Marten)
+                        .AddMeter("System.Runtime")
                         .AddMeter("Microsoft.AspNetCore.Hosting")
                         .AddMeter("Microsoft.AspNetCore.Server.Kestrel")
                         .AddMeter("System.Net.Http")
-                        .AddMeter("System.Runtime") // .NET runtime metrics
-                                                    // Custom application meters
                         .AddMeter("Wolverine")
                         .AddMeter("Marten")
-                        .AddMeter(TelemetryConstants.PaymentsMeterName) // Custom payments metrics
-                                                                        // Export to both OTLP (Grafana Cloud) and Prometheus endpoint
-                        .AddOtlpExporter()
-                        .AddPrometheusExporter()) // Prometheus scraping endpoint
+                        .AddMeter(TelemetryConstants.PaymentsMeterName)
+                        // Exporters
+                        .AddPrometheusExporter()
+                        .AddOtlpExporter(opt =>
+                        {
+                            opt.Protocol = OtlpExportProtocol.Grpc;
+                            opt.Endpoint = new Uri(otlpEndpoint ?? "");
+                            opt.Headers = otlpHeaders ?? "";
+                            opt.ExportProcessorType = ExportProcessorType.Batch;
+                            opt.BatchExportProcessorOptions = new BatchExportProcessorOptions<Activity>
+                            {
+                                MaxQueueSize = 2048,
+                                ScheduledDelayMilliseconds = 5000,
+                                ExporterTimeoutMilliseconds = 3000
+                            };
+                        }))
                 .WithTracing(tracingBuilder =>
                     tracingBuilder
                         .AddHttpClientInstrumentation(options =>
@@ -198,14 +200,34 @@ namespace TC.CloudGames.Payments.Api.Extensions
                                 activity.SetTag("exception.stacktrace", exception.StackTrace);
                             };
                         })
-                        .AddFusionCacheInstrumentation()
                         .AddNpgsql()
+                        //.AddFusionCacheInstrumentation()
                         .AddRedisInstrumentation()
                         .AddSource(TelemetryConstants.DatabaseActivitySource)
                         .AddSource(TelemetryConstants.CacheActivitySource)
-                        .AddSource("Wolverine")
-                        .AddSource("Marten")
-                        .AddOtlpExporter());
+                        // Important: filter out internal sources that cause 503s
+                        .SetSampler(new AlwaysOnSampler())
+                        .AddProcessor(new FilteringActivityProcessor(activity =>
+                            !activity.Source.Name.StartsWith("Azure.") &&
+                            !activity.Source.Name.StartsWith("Wolverine") &&
+                            !activity.Source.Name.StartsWith("Marten") &&
+                            !activity.DisplayName.Contains("ServiceBus")))
+                        ////.AddSource("Wolverine")
+                        ////.AddSource("Marten")
+                        // OTLP Exporter in batch, async, non-blocking
+                        .AddOtlpExporter(opt =>
+                        {
+                            opt.Protocol = OtlpExportProtocol.Grpc;
+                            opt.Endpoint = new Uri(otlpEndpoint ?? "");
+                            opt.Headers = otlpHeaders ?? "";
+                            opt.ExportProcessorType = ExportProcessorType.Batch;
+                            opt.BatchExportProcessorOptions = new BatchExportProcessorOptions<Activity>
+                            {
+                                MaxQueueSize = 2048,
+                                ScheduledDelayMilliseconds = 5000,
+                                ExporterTimeoutMilliseconds = 3000
+                            };
+                        }));
 
             // Register custom metrics classes
             services.AddSingleton<SystemMetrics>();
@@ -221,13 +243,22 @@ namespace TC.CloudGames.Payments.Api.Extensions
                 opts.UseSystemTextJsonForSerialization();
                 opts.ApplicationAssembly = typeof(Program).Assembly;
                 opts.Discovery.IncludeAssembly(typeof(GamePurchasedRequestHandler).Assembly);
-                Console.WriteLine($"Handler discovery: {opts.DescribeHandlerMatch(typeof(GamePurchasedRequestHandler))}");
 
                 // -------------------------------
                 // Define schema for Wolverine durability and Postgres persistence
                 // -------------------------------
                 const string wolverineSchema = "wolverine";
                 opts.Durability.MessageStorageSchemaName = wolverineSchema;
+
+                // -------------------------------
+                // Persist Wolverine messages in Postgres using the same schema
+                // -------------------------------
+                opts.PersistMessagesWithPostgresql(
+                        PostgresHelper.Build(builder.Configuration).ConnectionString,
+                        wolverineSchema
+                    );
+
+                opts.Policies.OnException<Exception>().RetryTimes(5);
 
                 // -------------------------------
                 // Enable durable local queues and auto transaction application
@@ -297,11 +328,19 @@ namespace TC.CloudGames.Payments.Api.Extensions
                         var topicName = $"{sb.TopicName}-topic";
                         opts.PublishMessage<EventContext<GamePaymentStatusUpdateIntegrationEvent>>()
                             .ToAzureServiceBusTopic(topicName)
-                            .CustomizeOutgoing(e => e.Headers["DomainAggregate"] = "PaymentAggregate")
+                            .CustomizeOutgoing(e =>
+                            {
+                                e.Headers["DomainAggregate"] = "PaymentAggregate";
+                            })
                             .BufferedInMemory()
-                            .UseDurableOutbox();
+                            .UseDurableOutbox()
+                            .CircuitBreaking(configure =>
+                            {
+                                configure.FailuresBeforeCircuitBreaks = 5;
+                                configure.MaximumEnvelopeRetryStorage = 10;
+                            });
 
-                        // Declare subscription for PAYMENT events
+                        // Declare subscription for GAMES events
                         opts.ListenToAzureServiceBusSubscription(
                             subscriptionName: $"payments.{sb.GamesTopicName}-subscription",
                             configureSubscriptions: configure =>
@@ -320,14 +359,6 @@ namespace TC.CloudGames.Payments.Api.Extensions
 
                         break;
                 }
-
-                // -------------------------------
-                // Persist Wolverine messages in Postgres using the same schema
-                // -------------------------------
-                opts.PersistMessagesWithPostgresql(
-                        PostgresHelper.Build(builder.Configuration).ConnectionString,
-                        wolverineSchema
-                    );
             })
             .ConfigureLogging(configureLogging: config =>
             {
@@ -352,6 +383,8 @@ namespace TC.CloudGames.Payments.Api.Extensions
                 var options = new StoreOptions();
                 options.Connection(connProvider.ConnectionString);
                 options.Logger(new ConsoleMartenLogger());
+                options.OpenTelemetry.TrackConnections = Marten.Services.TrackLevel.Normal;
+                options.OpenTelemetry.TrackEventCounters();
 
                 options.Events.DatabaseSchemaName = "events";
                 options.DatabaseSchemaName = "documents";
@@ -388,6 +421,27 @@ namespace TC.CloudGames.Payments.Api.Extensions
             services.Configure<PostgresOptions>(configuration.GetSection("Database"));
 
             return services;
+        }
+    }
+
+    /// <summary>
+    /// Processor to ignore noisy or unsafe activities.
+    /// </summary>
+    public class FilteringActivityProcessor : BaseProcessor<Activity>
+    {
+        private readonly Func<Activity, bool> _filter;
+
+        public FilteringActivityProcessor(Func<Activity, bool> filter)
+        {
+            _filter = filter;
+        }
+
+        public override void OnEnd(Activity data)
+        {
+            if (_filter(data))
+            {
+                base.OnEnd(data);
+            }
         }
     }
 }
