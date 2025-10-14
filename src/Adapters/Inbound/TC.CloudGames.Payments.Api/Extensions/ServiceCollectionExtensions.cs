@@ -233,7 +233,7 @@
             builder.Host.UseWolverine(opts =>
             {
                 opts.UseSystemTextJsonForSerialization();
-                ////opts.ApplicationAssembly = typeof(Program).Assembly;
+                opts.ApplicationAssembly = typeof(Program).Assembly;
                 opts.Discovery.IncludeAssembly(typeof(GamePurchasedRequestHandler).Assembly);
 
                 // -------------------------------
@@ -241,6 +241,7 @@
                 // -------------------------------
                 const string wolverineSchema = "wolverine";
                 opts.Durability.MessageStorageSchemaName = wolverineSchema;
+                opts.ServiceName = "tccloudgames";
 
                 // -------------------------------
                 // Persist Wolverine messages in Postgres using the same schema
