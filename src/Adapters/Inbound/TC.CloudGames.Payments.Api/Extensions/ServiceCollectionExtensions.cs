@@ -86,8 +86,6 @@
             var serviceVersion = typeof(Program).Assembly.GetName().Version?.ToString() ?? TelemetryConstants.Version;
             var environment = configuration["ASPNETCORE_ENVIRONMENT"] ?? "Development";
             var instanceId = Environment.MachineName;
-            var otlpEndpoint = configuration["OTEL_EXPORTER_OTLP_ENDPOINT"];
-            var otlpHeaders = configuration["OTEL_EXPORTER_OTLP_HEADERS"];
 
             services.AddOpenTelemetry()
                 .ConfigureResource(resource => resource
@@ -123,9 +121,6 @@
                         .AddPrometheusExporter()
                         .AddOtlpExporter(opt =>
                         {
-                            opt.Protocol = OtlpExportProtocol.Grpc;
-                            opt.Endpoint = new Uri(otlpEndpoint ?? "");
-                            opt.Headers = otlpHeaders ?? "";
                             opt.ExportProcessorType = ExportProcessorType.Batch;
                             opt.BatchExportProcessorOptions = new BatchExportProcessorOptions<Activity>
                             {
@@ -217,9 +212,6 @@
                         // OTLP Exporter in batch, async, non-blocking
                         .AddOtlpExporter(opt =>
                         {
-                            opt.Protocol = OtlpExportProtocol.Grpc;
-                            opt.Endpoint = new Uri(otlpEndpoint ?? "");
-                            opt.Headers = otlpHeaders ?? "";
                             opt.ExportProcessorType = ExportProcessorType.Batch;
                             opt.BatchExportProcessorOptions = new BatchExportProcessorOptions<Activity>
                             {
@@ -241,7 +233,7 @@
             builder.Host.UseWolverine(opts =>
             {
                 opts.UseSystemTextJsonForSerialization();
-                opts.ApplicationAssembly = typeof(Program).Assembly;
+                ////opts.ApplicationAssembly = typeof(Program).Assembly;
                 opts.Discovery.IncludeAssembly(typeof(GamePurchasedRequestHandler).Assembly);
 
                 // -------------------------------
@@ -258,7 +250,8 @@
                         wolverineSchema
                     );
 
-                opts.Policies.OnException<Exception>().RetryTimes(5);
+                ////opts.Policies.OnException<Exception>().RetryTimes(5);
+                opts.Policies.OnAnyException().RetryWithCooldown(TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(400), TimeSpan.FromMilliseconds(600), TimeSpan.FromMilliseconds(800), TimeSpan.FromMilliseconds(1000));
 
                 // -------------------------------
                 // Enable durable local queues and auto transaction application
