@@ -308,7 +308,11 @@
 
                         if (sb.AutoProvision) azureOpts.AutoProvision();
                         if (sb.AutoPurgeOnStartup) azureOpts.AutoPurgeOnStartup();
-                        if (sb.UseControlQueues) azureOpts.EnableWolverineControlQueues();
+                        if (sb.UseControlQueues)
+                        {
+                            azureOpts.EnableWolverineControlQueues();
+                            azureOpts.SystemQueuesAreEnabled(true);
+                        }
 
                         // Durable outbox for all sending endpoints
                         opts.Policies.UseDurableOutboxOnAllSendingEndpoints();
