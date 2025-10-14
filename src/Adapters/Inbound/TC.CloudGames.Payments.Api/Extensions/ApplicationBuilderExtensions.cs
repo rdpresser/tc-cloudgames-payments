@@ -1,4 +1,5 @@
-﻿using TC.CloudGames.Payments.Api.Middleware;
+﻿using Microsoft.AspNetCore.HttpOverrides;
+using TC.CloudGames.Payments.Api.Middleware;
 
 namespace TC.CloudGames.Payments.Api.Extensions
 {
@@ -14,8 +15,10 @@ namespace TC.CloudGames.Payments.Api.Extensions
         // Configures custom middlewares including HTTPS redirection, exception handling, correlation, logging, and health checks
         public static IApplicationBuilder UseCustomMiddlewares(this IApplicationBuilder app)
         {
-            app.UseHttpsRedirection()
-                .UseCustomExceptionHandler()
+            // Enables proxy headers (important for ACA)
+            app.UseForwardedHeaders(new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.All });
+
+            app.UseCustomExceptionHandler()
                 .UseCorrelationMiddleware()
                 .UseSerilogRequestLogging()
                 .UseHealthChecks("/health", new HealthCheckOptions
@@ -35,7 +38,7 @@ namespace TC.CloudGames.Payments.Api.Extensions
                 })
                 // Add Prometheus metrics endpoint
                 .UseOpenTelemetryPrometheusScrapingEndpoint("/metrics");
-            
+
             return app;
         }
 
