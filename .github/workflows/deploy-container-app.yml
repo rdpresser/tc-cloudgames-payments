@@ -247,6 +247,7 @@ jobs:
           az containerapp secret set --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" \
             --secrets \
               "servicebus-connection-string=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-connection-string,identityref:system" \
+              "servicebus-namespace=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-namespace,identityref:system" \
               "servicebus-auto-provision=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-auto-provision,identityref:system" \
               "servicebus-max-delivery-count=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-max-delivery-count,identityref:system" \
               "servicebus-enable-dead-lettering=keyvaultref:https://$KEY_VAULT_NAME.vault.azure.net/secrets/servicebus-enable-dead-lettering,identityref:system" \
@@ -359,6 +360,7 @@ jobs:
               CACHE_PASSWORD=secretref:cache-password \
               CACHE_SECURE=secretref:cache-secure \
               AZURE_SERVICEBUS_CONNECTIONSTRING=secretref:servicebus-connection-string \
+              AZURE_SERVICEBUS_NAMESPACE=secretref:servicebus-namespace \
               AZURE_SERVICEBUS_AUTO_PROVISION=secretref:servicebus-auto-provision \
               AZURE_SERVICEBUS_MAX_DELIVERY_COUNT=secretref:servicebus-max-delivery-count \
               AZURE_SERVICEBUS_ENABLE_DEAD_LETTERING=secretref:servicebus-enable-dead-lettering \
