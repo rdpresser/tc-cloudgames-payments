@@ -23,28 +23,28 @@
 
         public static WebApplicationBuilder AddCustomLoggingTelemetry(this WebApplicationBuilder builder)
         {
-            builder.Logging.ClearProviders();
+            ////builder.Logging.ClearProviders();
 
-            builder.Logging.AddOpenTelemetry(options =>
-            {
-                options.IncludeScopes = true;
-                options.IncludeFormattedMessage = true;
+            ////builder.Logging.AddOpenTelemetry(options =>
+            ////{
+            ////    options.IncludeScopes = true;
+            ////    options.IncludeFormattedMessage = true;
 
-                // Enhanced resource configuration for logs using centralized constants
-                options.SetResourceBuilder(
-                    ResourceBuilder.CreateDefault()
-                        .AddService(TelemetryConstants.ServiceName,
-                                   serviceVersion: typeof(Program).Assembly.GetName().Version?.ToString() ?? TelemetryConstants.Version)
-                        .AddAttributes(new Dictionary<string, object>
-                        {
-                            ["deployment.environment"] = (builder.Configuration["ASPNETCORE_ENVIRONMENT"] ?? "Development").ToLowerInvariant(),
-                            ["service.namespace"] = TelemetryConstants.ServiceNamespace.ToLowerInvariant(),
-                            ["cloud.provider"] = "azure",
-                            ["cloud.platform"] = "azure_container_apps"
-                        }));
+            ////    // Enhanced resource configuration for logs using centralized constants
+            ////    options.SetResourceBuilder(
+            ////        ResourceBuilder.CreateDefault()
+            ////            .AddService(TelemetryConstants.ServiceName,
+            ////                       serviceVersion: typeof(Program).Assembly.GetName().Version?.ToString() ?? TelemetryConstants.Version)
+            ////            .AddAttributes(new Dictionary<string, object>
+            ////            {
+            ////                ["deployment.environment"] = (builder.Configuration["ASPNETCORE_ENVIRONMENT"] ?? "Development").ToLowerInvariant(),
+            ////                ["service.namespace"] = TelemetryConstants.ServiceNamespace.ToLowerInvariant(),
+            ////                ["cloud.provider"] = "azure",
+            ////                ["cloud.platform"] = "azure_container_apps"
+            ////            }));
 
-                options.AddOtlpExporter();
-            });
+            ////    options.AddOtlpExporter();
+            ////});
 
             return builder;
         }
