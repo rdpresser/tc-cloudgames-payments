@@ -5,7 +5,6 @@ builder.ConfigureEnvironmentVariables();
 
 // Configure Serilog as logging provider
 builder.Host.UseCustomSerilog(builder.Configuration);
-builder.AddCustomLoggingTelemetry();
 
 // Register application, infrastructure and API services
 builder.Services.AddPaymentServices(builder);
