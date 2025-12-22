@@ -7,68 +7,45 @@
         {
             return hostBuilder.UseSerilog((hostContext, services, loggerConfiguration) =>
             {
+                // Read default configuration (sinks, levels, overrides)
                 loggerConfiguration.ReadFrom.Configuration(hostContext.Configuration);
 
-                // Get consistent values using centralized constants
+                // Useful values
                 var environment = configuration["ASPNETCORE_ENVIRONMENT"]?.ToLower() ?? "development";
                 var serviceVersion = typeof(Program).Assembly.GetName().Version?.ToString() ?? TelemetryConstants.Version;
+                var instanceId = Environment.MachineName;
 
-                // Timezone customizado
+                // Timezone (if configured)
                 var timeZoneId = configuration["TimeZone"] ?? "UTC";
-                var timeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
-                loggerConfiguration.Enrich.With(new UtcToLocalTimeEnricher(timeZone));
+                TimeZoneInfo? timeZone = null;
+                try
+                {
+                    timeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+                }
+                catch
+                {
+                    // Fallback to UTC if TimeZone is invalid
+                    timeZone = TimeZoneInfo.Utc;
+                }
 
-                // Enrich com trace_id e span_id
-                loggerConfiguration.Enrich.WithSpan();
+                // --- Essential Enrichers ---
+                // Maintains enrichment with span/trace, context and static properties
+                loggerConfiguration.Enrich.With(new UtcToLocalTimeEnricher(timeZone));
+                loggerConfiguration.Enrich.WithSpan();           // Ensures trace_id/span_id when available
                 loggerConfiguration.Enrich.FromLogContext();
 
-                // Use OpenTelemetry semantic conventions (dot notation) for Serilog properties
+                // OpenTelemetry semantic conventions / resource consistency
                 loggerConfiguration.Enrich.WithProperty("service.name", TelemetryConstants.ServiceName);
                 loggerConfiguration.Enrich.WithProperty("service.namespace", TelemetryConstants.ServiceNamespace);
                 loggerConfiguration.Enrich.WithProperty("service.version", serviceVersion);
                 loggerConfiguration.Enrich.WithProperty("deployment.environment", environment);
-
-                // Additional OpenTelemetry resource attributes for consistency
                 loggerConfiguration.Enrich.WithProperty("cloud.provider", "azure");
-                loggerConfiguration.Enrich.WithProperty("cloud.platform", "azure_container_apps");
-                loggerConfiguration.Enrich.WithProperty("service.instance.id", Environment.MachineName);
+                loggerConfiguration.Enrich.WithProperty("cloud.platform", "azure_kubernetes_service");
+                loggerConfiguration.Enrich.WithProperty("service.instance.id", instanceId);
 
-                // Sensitive data masking
-                ////loggerConfiguration.Enrich.WithSensitiveDataMasking(options =>
-                ////{
-                ////    options.MaskProperties = ["Password", "Email", "PhoneNumber"];
-                ////});
-
-                // Console sink for local/dev visibility
-                loggerConfiguration.WriteTo.Console(new Serilog.Formatting.Json.JsonFormatter()); // Optional for local
-
-                // Loki sink with FIXED label naming (underscores for Grafana Cloud compatibility)
-                var serilogUsing = configuration.GetSection("Serilog:Using").Get<string[]>() ?? [];
-                var useLoki = Array.Exists(serilogUsing, s => s == "Serilog.Sinks.Grafana.Loki");
-                if (useLoki)
-                {
-                    var grafanaLokiUrl = configuration["Serilog:WriteTo:1:Args:uri"];
-                    if (string.IsNullOrEmpty(grafanaLokiUrl))
-                        throw new InvalidOperationException("GrafanaLokiUrl configuration is required.");
-
-                    loggerConfiguration.WriteTo.GrafanaLoki(
-                        uri: grafanaLokiUrl,
-                        credentials: new LokiCredentials
-                        {
-                            Login = configuration["Serilog:WriteTo:1:Args:credentials:username"] ?? string.Empty,
-                            Password = Environment.GetEnvironmentVariable("GRAFANA_LOGS_API_TOKEN") ?? string.Empty
-                        },
-                        labels: new[]
-                        {
-                            // CRITICAL: Use underscores for Loki label compatibility (not dots!)
-                            new LokiLabel { Key = "service_name", Value = TelemetryConstants.ServiceName },
-                            new LokiLabel { Key = "service_namespace", Value = TelemetryConstants.ServiceNamespace },
-                            new LokiLabel { Key = "deployment_environment", Value = environment },
-                            new LokiLabel { Key = "cloud_provider", Value = "azure" },
-                            new LokiLabel { Key = "service_version", Value = serviceVersion }
-                        }
-                    );
-                }
+                // NOTE: Console sink (JSON stdout) is already configured in appsettings.json via ReadFrom.Configuration()
+                // No need to add WriteTo.Console() here to avoid duplicate log entries
+                // Grafana Agent / Loki collects from stdout as configured in appsettings.Development.json and appsettings.Production.json
             });
         }
     }

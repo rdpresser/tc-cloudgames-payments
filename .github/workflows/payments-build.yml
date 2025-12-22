@@ -1,0 +1,378 @@
+name: 🏗️ Payments API CI Pipeline
+
+env:
+  SERVICE_NAME: payms-api
+  SOLUTION_FILE: TC.CloudGames.Payments.sln
+  DOCKERFILE_PATH: services/payments/src/Adapters/Inbound/TC.CloudGames.Payments.Api/Dockerfile
+  WORKSPACE_PATH: tc-cloudgames-solution/services/payments
+  DOTNET_VERSION: '9.0.x'
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, closed]
+    paths:
+      - 'services/payments/**'
+      - 'shared/common/**'
+      - '.github/workflows/**'
+      - 'services/payments/.github/workflows/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment for ACR'
+        default: 'dev-rodrigo'
+        type: choice
+        options:
+          - dev-rodrigo
+      skip-tests:
+        description: 'Skip unit tests (emergency only)'
+        default: false
+        type: boolean
+      skip-security-scan:
+        description: 'Skip Trivy security scan (emergency only)'
+        default: false
+        type: boolean
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 1: Validate trigger conditions
+  # ═══════════════════════════════════════════════════════════════════════════
+  validate:
+    name: 🔍 Validate Trigger
+    permissions: {}
+    runs-on: ubuntu-latest
+    if: (github.event.pull_request.merged == true) || (github.event_name == 'workflow_dispatch') || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    outputs:
+      should-continue: ${{ steps.check.outputs.should-continue }}
+      should-deploy: ${{ steps.check.outputs.should-deploy }}
+      environment: ${{ steps.check.outputs.environment }}
+    steps:
+      - name: ✅ Check trigger conditions
+        id: check
+        run: |
+          SHOULD_DEPLOY="false"
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event.pull_request.merged }}" == "true" ]; then
+            SHOULD_DEPLOY="true"
+          fi
+          
+          echo "should-continue=true" >> $GITHUB_OUTPUT
+          echo "should-deploy=$SHOULD_DEPLOY" >> $GITHUB_OUTPUT
+          echo "environment=${{ github.event.inputs.environment || 'dev-rodrigo' }}" >> $GITHUB_OUTPUT
+          echo "🚀 Pipeline triggered by: ${{ github.event_name }}"
+          echo "📌 Branch: ${{ github.ref_name }}"
+          echo "🔖 Commit: ${{ github.sha }}"
+          echo "📦 Should Deploy: $SHOULD_DEPLOY"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 2: Run unit tests
+  # ═══════════════════════════════════════════════════════════════════════════
+  test:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: validate
+    if: needs.validate.outputs.should-continue == 'true' && github.event.inputs.skip-tests != 'true'
+    permissions:
+      contents: read
+      actions: read
+      checks: write
+      pull-requests: write
+    steps:
+      - name: 📂 Prepare workspace
+        run: mkdir -p ${{ env.WORKSPACE_PATH }}
+
+      - name: 📥 Checkout API repository
+        uses: actions/checkout@v4
+        with:
+          path: ${{ env.WORKSPACE_PATH }}
+
+      - name: 📥 Checkout shared repository
+        uses: actions/checkout@v4
+        with:
+          repository: rdpresser/tc-cloudgames-common
+          path: tc-cloudgames-solution/shared/common
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: ⚙️ Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: 📦 Restore dependencies
+        run: dotnet restore ${{ env.WORKSPACE_PATH }}/${{ env.SOLUTION_FILE }}
+
+      - name: 🏗️ Build solution
+        run: dotnet build ${{ env.WORKSPACE_PATH }}/${{ env.SOLUTION_FILE }} --no-restore --configuration Release
+
+      - name: 🧪 Run unit tests with coverage
+        run: |
+          dotnet test ${{ env.WORKSPACE_PATH }}/${{ env.SOLUTION_FILE }} \
+            --no-build \
+            --configuration Release \
+            --logger "trx;LogFileName=unit-tests.trx" \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ${{ env.WORKSPACE_PATH }}/test-results \
+            --verbosity normal
+
+      - name: 📊 Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: 🧪 Unit Tests Results
+          path: ${{ env.WORKSPACE_PATH }}/test-results/*.trx
+          reporter: dotnet-trx
+          fail-on-error: true
+        env:
+          GIT_DIR: ${{ github.workspace }}/${{ env.WORKSPACE_PATH }}/.git
+          GIT_WORK_TREE: ${{ github.workspace }}/${{ env.WORKSPACE_PATH }}
+
+      - name: 📊 Generate coverage report
+        if: always()
+        run: |
+          dotnet tool install -g dotnet-reportgenerator-globaltool
+          reportgenerator \
+            "-reports:${{ env.WORKSPACE_PATH }}/test-results/**/coverage.cobertura.xml" \
+            "-targetdir:${{ env.WORKSPACE_PATH }}/coverage-report" \
+            "-reporttypes:Html;Badges;TextSummary" \
+            "-verbosity:Info"
+
+      - name: 📈 Upload test artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ github.sha }}
+          path: |
+            ${{ env.WORKSPACE_PATH }}/coverage-report/
+            ${{ env.WORKSPACE_PATH }}/test-results/*.trx
+            ${{ env.WORKSPACE_PATH }}/test-results/**/coverage.cobertura.xml
+          retention-days: 7
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 3: Skip tests placeholder (when skip-tests is true)
+  # ═══════════════════════════════════════════════════════════════════════════
+  test-skipped:
+    name: 🚫 Tests Skipped
+    permissions: {}
+    runs-on: ubuntu-latest
+    needs: validate
+    if: needs.validate.outputs.should-continue == 'true' && github.event.inputs.skip-tests == 'true'
+    steps:
+      - name: ⚠️ Unit tests skipped
+        run: |
+          echo "::warning::Unit tests were skipped via workflow input"
+          echo "✅ Proceeding without running tests"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 4: Build, Scan, and Push Docker image
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-and-push:
+    name: 🐳 Build & Push
+    runs-on: ubuntu-latest
+    needs: [validate, test, test-skipped]
+    if: |
+      always() &&
+      needs.validate.outputs.should-continue == 'true' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped' || needs.test-skipped.result == 'success')
+    environment: ${{ needs.validate.outputs.environment }}
+    permissions:
+      contents: read
+      security-events: write
+    outputs:
+      image-tag: ${{ steps.build-vars.outputs.image-tag }}
+      image-uri: ${{ steps.build-vars.outputs.image-uri }}
+    steps:
+      # ─────────────────────────────────────────────────────────────────────────
+      # Setup
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: 📂 Prepare workspace
+        run: mkdir -p ${{ env.WORKSPACE_PATH }}
+
+      - name: 📥 Checkout API repository
+        uses: actions/checkout@v4
+        with:
+          path: ${{ env.WORKSPACE_PATH }}
+
+      - name: 📥 Checkout shared repository
+        uses: actions/checkout@v4
+        with:
+          repository: rdpresser/tc-cloudgames-common
+          path: tc-cloudgames-solution/shared/common
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # Azure Authentication
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: 🔐 Azure Login
+        if: needs.validate.outputs.should-deploy == 'true'
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: 🔗 Get ACR Info
+        if: needs.validate.outputs.should-deploy == 'true'
+        id: acr-info
+        run: |
+          GITHUB_ENVIRONMENT="${{ needs.validate.outputs.environment }}"
+          AZURE_ENV_PREFIX=$(echo $GITHUB_ENVIRONMENT | cut -d'-' -f1)
+          RESOURCE_GROUP="tc-cloudgames-solution-${AZURE_ENV_PREFIX}-rg"
+          ACR_NAME=$(az acr list --resource-group $RESOURCE_GROUP --query "[?starts_with(name, 'tccloudgames${AZURE_ENV_PREFIX}')].name" -o tsv | head -1)
+          ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
+
+          echo "acr-name=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "acr-login-server=$ACR_LOGIN_SERVER" >> $GITHUB_OUTPUT
+          echo "📦 ACR: $ACR_LOGIN_SERVER"
+
+      - name: 🏗️ Prepare Build Variables
+        id: build-vars
+        run: |
+          IMAGE_TAG="$(date +%Y%m%d-%H%M%S)-$(echo ${{ github.sha }} | cut -c1-8)"
+          
+          if [ "${{ needs.validate.outputs.should-deploy }}" == "true" ]; then
+            IMAGE_URI="${{ steps.acr-info.outputs.acr-login-server }}/${{ env.SERVICE_NAME }}:${IMAGE_TAG}"
+            IMAGE_URI_LATEST="${{ steps.acr-info.outputs.acr-login-server }}/${{ env.SERVICE_NAME }}:latest"
+          else
+            # Para PRs, usar tags temporárias sem ACR
+            IMAGE_URI="${{ env.SERVICE_NAME }}:${IMAGE_TAG}"
+            IMAGE_URI_LATEST="${{ env.SERVICE_NAME }}:latest"
+          fi
+
+          echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "image-uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "image-uri-latest=$IMAGE_URI_LATEST" >> $GITHUB_OUTPUT
+
+          echo "🔖 Image Tag: $IMAGE_TAG"
+          echo "📦 Image URI: $IMAGE_URI"
+
+      - name: 🐳 Login to Azure Container Registry
+        if: needs.validate.outputs.should-deploy == 'true'
+        run: az acr login --name ${{ steps.acr-info.outputs.acr-name }}
+
+      - name: ⚙️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # Build Docker Image (without push)
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: 🏗️ Build Docker Image
+        uses: docker/build-push-action@v5
+        id: docker-build
+        with:
+          context: ./tc-cloudgames-solution
+          file: ./tc-cloudgames-solution/${{ env.DOCKERFILE_PATH }}
+          push: false
+          load: true
+          tags: |
+            ${{ steps.build-vars.outputs.image-uri }}
+            ${{ steps.build-vars.outputs.image-uri-latest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: ✅ Build completed
+        run: |
+          echo "🏗️ Docker image built successfully"
+          echo "📦 Image: ${{ steps.build-vars.outputs.image-uri }}"
+          docker images | grep ${{ env.SERVICE_NAME }} || true
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # Security Scan with Trivy
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: 🔒 Security Scan with Trivy
+        if: github.event.inputs.skip-security-scan != 'true'
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ steps.build-vars.outputs.image-uri }}
+          format: table
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          exit-code: 1
+          ignore-unfixed: true
+          timeout: 5m
+
+      - name: 📊 Generate Trivy SARIF Report
+        if: always() && github.event.inputs.skip-security-scan != 'true'
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ steps.build-vars.outputs.image-uri }}
+          format: sarif
+          output: trivy-results.sarif
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          timeout: 5m
+
+      - name: 📤 Upload Trivy Results to GitHub Security
+        if: always() && github.event.inputs.skip-security-scan != 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: ✅ Security scan passed
+        if: github.event.inputs.skip-security-scan != 'true'
+        run: echo "🔒 No HIGH/CRITICAL vulnerabilities found"
+
+      - name: ⚠️ Security scan skipped
+        if: github.event.inputs.skip-security-scan == 'true'
+        run: echo "::warning::Security scan was skipped via workflow input"
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # Push to ACR
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: ✅ Validate ACR info
+        if: needs.validate.outputs.should-deploy == 'true'
+        run: |
+          if [ -z "${{ steps.acr-info.outputs.acr-name }}" ]; then
+            echo "❌ acr-name is empty; cannot push image"; exit 1; fi
+          echo "ACR Name: ${{ steps.acr-info.outputs.acr-name }}"
+          az acr list --query "[?name=='${{ steps.acr-info.outputs.acr-name }}'].name" -o tsv | grep -q "${{ steps.acr-info.outputs.acr-name }}" || {
+            echo "❌ ACR ${{ steps.acr-info.outputs.acr-name }} not found"; exit 1; }
+        shell: bash
+
+      - name: 🚀 Push Docker Image to ACR
+        if: needs.validate.outputs.should-deploy == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ./tc-cloudgames-solution
+          file: ./tc-cloudgames-solution/${{ env.DOCKERFILE_PATH }}
+          push: true
+          tags: |
+            ${{ steps.build-vars.outputs.image-uri }}
+            ${{ steps.build-vars.outputs.image-uri-latest }}
+          cache-from: type=gha
+          platforms: linux/amd64
+
+      - name: 🔍 Show pushed tags in ACR
+        if: needs.validate.outputs.should-deploy == 'true'
+        run: |
+          echo "Listing tags for repository '${{ env.SERVICE_NAME }}' in ${{ steps.acr-info.outputs.acr-name }}"
+          az acr repository show-tags \
+            --name ${{ steps.acr-info.outputs.acr-name }} \
+            --repository ${{ env.SERVICE_NAME }} \
+            --orderby time_desc \
+            --top 10 \
+            --output table || true
+        shell: bash
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # Verify Push
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: ✅ Verify Image in ACR
+        if: needs.validate.outputs.should-deploy == 'true'
+        run: |
+          echo "🔍 Verifying image in ACR..."
+          az acr repository show-tags \
+            --name ${{ steps.acr-info.outputs.acr-name }} \
+            --repository ${{ env.SERVICE_NAME }} \
+            --orderby time_desc \
+            --top 5 \
+            --output table
+
+          echo ""
+          echo "════════════════════════════════════════════════════════════════"
+          echo "✅ BUILD COMPLETED SUCCESSFULLY"
+          echo "════════════════════════════════════════════════════════════════"
+          echo "📦 Image Tag:    ${{ steps.build-vars.outputs.image-tag }}"
+          echo "📦 Image URI:    ${{ steps.build-vars.outputs.image-uri }}"
+          echo "📦 Latest Tag:   ${{ steps.build-vars.outputs.image-uri-latest }}"
+          echo "🔒 Security:     Trivy scan passed"
+          echo "🚀 Next Step:    ArgoCD will sync the new image to AKS"
+          echo "════════════════════════════════════════════════════════════════"

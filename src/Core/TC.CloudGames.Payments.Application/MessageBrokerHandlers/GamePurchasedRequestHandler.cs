@@ -5,7 +5,7 @@ using Wolverine.Marten;
 
 namespace TC.CloudGames.Payments.Application.MessageBrokerHandlers
 {
-    public class GamePurchasedRequestHandler
+    public class GamePurchasedRequestHandler : IWolverineHandler
     {
         private readonly IPaymentRepository _paymentRepository;
         private readonly IMartenOutbox _outbox;

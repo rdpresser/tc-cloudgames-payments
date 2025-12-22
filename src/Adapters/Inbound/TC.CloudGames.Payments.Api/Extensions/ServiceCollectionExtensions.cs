@@ -1,4 +1,6 @@
-﻿namespace TC.CloudGames.Payments.Api.Extensions
+﻿using TC.CloudGames.SharedKernel.Infrastructure.Telemetry;
+
+namespace TC.CloudGames.Payments.Api.Extensions
 {
     internal static class ServiceCollectionExtensions
     {
@@ -16,91 +18,85 @@
                 .AddHttpContextAccessor()
                 .ConfigureAppSettings(builder.Configuration)
                 .AddCustomHealthCheck()
-                .AddCustomOpenTelemetry(builder.Configuration);
+                .AddCustomOpenTelemetry(builder, builder.Configuration);
 
             return services;
         }
 
-        public static WebApplicationBuilder AddCustomLoggingTelemetry(this WebApplicationBuilder builder)
+        private static IHostApplicationBuilder AddOpenTelemetryExporters(this IHostApplicationBuilder builder)
         {
-            builder.Logging.ClearProviders();
+            var useOtlpExporter = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
 
-            builder.Logging.AddOpenTelemetry(options =>
+            // Load Grafana configuration via Helper (to check if Agent is enabled)
+            var grafanaSettings = GrafanaHelper.Build(builder.Configuration);
+
+            if (grafanaSettings.Agent.Enabled && useOtlpExporter)
             {
-                options.IncludeScopes = true;
-                options.IncludeFormattedMessage = true;
-
-                // Enhanced resource configuration for logs using centralized constants
-                options.SetResourceBuilder(
-                    ResourceBuilder.CreateDefault()
-                        .AddService(TelemetryConstants.ServiceName,
-                                   serviceVersion: typeof(Program).Assembly.GetName().Version?.ToString() ?? TelemetryConstants.Version)
-                        .AddAttributes(new Dictionary<string, object>
+                // Manual OTLP Exporter configuration with Grafana settings
+                builder.Services.AddOpenTelemetry()
+                    .WithTracing(tracing =>
+                    {
+                        tracing.AddOtlpExporter(otlp =>
                         {
-                            ["deployment.environment"] = (builder.Configuration["ASPNETCORE_ENVIRONMENT"] ?? "Development").ToLowerInvariant(),
-                            ["service.namespace"] = TelemetryConstants.ServiceNamespace.ToLowerInvariant(),
-                            ["cloud.provider"] = "azure",
-                            ["cloud.platform"] = "azure_container_apps"
-                        }));
+                            otlp.Endpoint = new Uri(grafanaSettings.Otlp.Endpoint);
+                            otlp.Protocol = grafanaSettings.Otlp.Protocol.ToLowerInvariant() == "grpc"
+                                ? OpenTelemetry.Exporter.OtlpExportProtocol.Grpc
+                                : OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
 
-                options.AddOtlpExporter();
-            });
+                            // Headers (if any - normally not needed with local Grafana Agent)
+                            if (!string.IsNullOrWhiteSpace(grafanaSettings.Otlp.Headers))
+                            {
+                                otlp.Headers = grafanaSettings.Otlp.Headers;
+                            }
+
+                            // Timeout
+                            otlp.TimeoutMilliseconds = grafanaSettings.Otlp.TimeoutSeconds * 1000;
+                        });
+                    });
+
+                Console.WriteLine($"[INFO] OTLP Exporter configured - Endpoint: {grafanaSettings.Otlp.Endpoint}, Protocol: {grafanaSettings.Otlp.Protocol}");
+            }
+            else
+            {
+                Console.WriteLine("[WARN] Grafana Agent is DISABLED - Traces will be generated but NOT exported.");
+                Console.WriteLine("[WARN] To enable: Set Grafana:Agent:Enabled=true or GRAFANA_AGENT_ENABLED=true");
+            }
 
             return builder;
         }
 
-        // Health Checks with Enhanced Telemetry
-        public static IServiceCollection AddCustomHealthCheck(this IServiceCollection services)
-        {
-            services.AddHealthChecks()
-                .AddNpgSql(sp =>
-                {
-                    var connectionProvider = sp.GetRequiredService<IConnectionStringProvider>();
-                    return connectionProvider.ConnectionString;
-                },
-                    name: "PostgreSQL",
-                    failureStatus: HealthStatus.Unhealthy,
-                    tags: ["db", "sql", "postgres", "live", "ready"])
-                .AddCheck("Memory", () =>
-                {
-                    var allocated = GC.GetTotalMemory(false);
-                    var mb = allocated / 1024 / 1024;
-
-                    return mb < 1024
-                    ? HealthCheckResult.Healthy($"Memory usage: {mb} MB")
-                    : HealthCheckResult.Degraded($"High memory usage: {mb} MB");
-                },
-                    tags: ["memory", "system", "live"])
-                .AddCheck("Custom-Metrics", () =>
-                {
-                    // Add any custom health logic for your metrics system
-                    return HealthCheckResult.Healthy("Custom metrics are functioning");
-                },
-                    tags: ["metrics", "telemetry", "live"]);
-
-            return services;
-        }
-
-        public static IServiceCollection AddCustomOpenTelemetry(this IServiceCollection services, IConfiguration configuration)
+        public static IServiceCollection AddCustomOpenTelemetry(this IServiceCollection services, IHostApplicationBuilder builder, IConfiguration configuration)
         {
             var serviceVersion = typeof(Program).Assembly.GetName().Version?.ToString() ?? TelemetryConstants.Version;
             var environment = configuration["ASPNETCORE_ENVIRONMENT"] ?? "Development";
             var instanceId = Environment.MachineName;
+            var serviceName = TelemetryConstants.ServiceName;
+            var serviceNamespace = TelemetryConstants.ServiceNamespace;
 
+            // Logging via OpenTelemetry
+            builder.Logging.AddOpenTelemetry(logging =>
+            {
+                logging.IncludeFormattedMessage = true;
+                logging.IncludeScopes = true;
+            });
+
+            // ==============================================================
+            // METRICS AND TRACES
+            // ==============================================================
             services.AddOpenTelemetry()
-                .ConfigureResource(resource => resource
-                    .AddService(TelemetryConstants.ServiceName, serviceVersion: serviceVersion, serviceInstanceId: instanceId)
-                    .AddAttributes(new Dictionary<string, object>
-                    {
-                        ["deployment.environment"] = environment.ToLowerInvariant(),
-                        ["service.namespace"] = TelemetryConstants.ServiceNamespace.ToLowerInvariant(),
-                        ["service.instance.id"] = instanceId,
-                        ["container.name"] = Environment.GetEnvironmentVariable("HOSTNAME") ?? instanceId,
-                        ["cloud.provider"] = "azure",
-                        ["cloud.platform"] = "azure_container_apps",
-                        ["service.team"] = "engineering",
-                        ["service.owner"] = "devops"
-                    }))
+                // Configure ResourceBuilder (metadata sent with metrics and traces)
+                .ConfigureResource(resource => resource.AddService(serviceName, serviceNamespace: serviceNamespace, serviceVersion: serviceVersion, serviceInstanceId: instanceId)
+                .AddAttributes(new Dictionary<string, object>
+                {
+                    ["deployment.environment"] = environment.ToLowerInvariant(),
+                    ["service.namespace"] = serviceNamespace.ToLowerInvariant(),
+                    ["service.instance.id"] = instanceId,
+                    ["container.name"] = Environment.GetEnvironmentVariable("HOSTNAME") ?? instanceId,
+                    ["cloud.provider"] = "azure",
+                    ["cloud.platform"] = "azure_kubernetes_service",
+                    ["service.team"] = "engineering",
+                    ["service.owner"] = "devops"
+                }))
                 .WithMetrics(metricsBuilder =>
                     metricsBuilder
                         // ASP.NET Core and system instrumentation
@@ -118,17 +114,7 @@
                         .AddMeter("Marten")
                         .AddMeter(TelemetryConstants.PaymentsMeterName)
                         // Exporters
-                        .AddPrometheusExporter()
-                        .AddOtlpExporter(opt =>
-                        {
-                            opt.ExportProcessorType = ExportProcessorType.Batch;
-                            opt.BatchExportProcessorOptions = new BatchExportProcessorOptions<Activity>
-                            {
-                                MaxQueueSize = 2048,
-                                ScheduledDelayMilliseconds = 5000,
-                                ExporterTimeoutMilliseconds = 3000
-                            };
-                        }))
+                        .AddPrometheusExporter())
                 .WithTracing(tracingBuilder =>
                     tracingBuilder
                         .AddHttpClientInstrumentation(options =>
@@ -207,22 +193,49 @@
                             !activity.Source.Name.StartsWith("Wolverine") &&
                             !activity.Source.Name.StartsWith("Marten") &&
                             !activity.DisplayName.Contains("ServiceBus")))
-                        ////.AddSource("Wolverine")
-                        ////.AddSource("Marten")
-                        // OTLP Exporter in batch, async, non-blocking
-                        .AddOtlpExporter(opt =>
-                        {
-                            opt.ExportProcessorType = ExportProcessorType.Batch;
-                            opt.BatchExportProcessorOptions = new BatchExportProcessorOptions<Activity>
-                            {
-                                MaxQueueSize = 2048,
-                                ScheduledDelayMilliseconds = 5000,
-                                ExporterTimeoutMilliseconds = 3000
-                            };
-                        }));
+                    ////.AddSource("Wolverine")
+                    ////.AddSource("Marten")
+                    );
 
-            // Register custom metrics classes
+            // ==============================================================
+            // CUSTOM METRICS REGISTRATION
+            // ==============================================================
             services.AddSingleton<SystemMetrics>();
+
+            // Add exporters (OTLP will be configured only if Grafana is enabled)
+            builder.AddOpenTelemetryExporters();
+
+            return services;
+        }
+
+        // Health Checks with Enhanced Telemetry
+        public static IServiceCollection AddCustomHealthCheck(this IServiceCollection services)
+        {
+            services.AddHealthChecks()
+                .AddNpgSql(sp =>
+                {
+                    var connectionProvider = sp.GetRequiredService<IConnectionStringProvider>();
+                    return connectionProvider.ConnectionString;
+                },
+                    name: "PostgreSQL",
+                    failureStatus: HealthStatus.Unhealthy,
+                    tags: ["db", "sql", "postgres", "live", "ready"])
+                .AddCheck("Memory", () =>
+                {
+                    var allocated = GC.GetTotalMemory(false);
+                    var mb = allocated / 1024 / 1024;
+
+                    return mb < 1024
+                    ? HealthCheckResult.Healthy($"Memory usage: {mb} MB")
+                    : HealthCheckResult.Degraded($"High memory usage: {mb} MB");
+                },
+                    tags: ["memory", "system", "live"])
+                .AddCheck("Custom-Metrics", () =>
+                {
+                    // Add any custom health logic for your metrics system
+                    return HealthCheckResult.Healthy("Custom metrics are functioning");
+                },
+                    tags: ["metrics", "telemetry", "live"]);
 
             return services;
         }
