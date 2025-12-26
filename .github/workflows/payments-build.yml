@@ -376,3 +376,36 @@ jobs:
           echo "🔒 Security:     Trivy scan passed"
           echo "🚀 Next Step:    ArgoCD will sync the new image to AKS"
           echo "════════════════════════════════════════════════════════════════"
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # Force ArgoCD Image Updater Check
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: 🔄 Trigger ArgoCD Image Updater
+        if: needs.validate.outputs.should-deploy == 'true'
+        run: |
+          echo "🔄 Forcing ArgoCD Image Updater to check new digest..."
+          
+          # Get AKS credentials
+          GITHUB_ENVIRONMENT="${{ needs.validate.outputs.environment }}"
+          AZURE_ENV_PREFIX=$(echo $GITHUB_ENVIRONMENT | cut -d'-' -f1)
+          RESOURCE_GROUP="tc-cloudgames-solution-${AZURE_ENV_PREFIX}-rg"
+          CLUSTER_NAME=$(az aks list --resource-group $RESOURCE_GROUP --query "[0].name" -o tsv)
+          
+          az aks get-credentials \
+            --resource-group $RESOURCE_GROUP \
+            --name $CLUSTER_NAME \
+            --overwrite-existing
+          
+          # Force ImageUpdater reconciliation
+          kubectl annotate imageupdater cloudgames-images \
+            -n argocd \
+            argocd-image-updater.argoproj.io/force-check="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --overwrite || echo "⚠️ ImageUpdater CR not found, skipping"
+          
+          # Annotate production application
+          kubectl annotate application cloudgames-prod \
+            -n argocd \
+            argocd-image-updater.argoproj.io/image-list="payments=tccloudgamesdevcr8nacr.azurecr.io/${{ env.SERVICE_NAME }}" \
+            --overwrite 2>/dev/null || echo "⚠️ Application cloudgames-prod not found"
+          
+          echo "✅ ArgoCD Image Updater notified"

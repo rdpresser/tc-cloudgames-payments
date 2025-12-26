@@ -15,7 +15,6 @@
 		<PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
 		<PackageReference Include="Serilog.Enrichers.Sensitive" Version="2.1.0" />
 		<PackageReference Include="Serilog.Enrichers.Span" Version="3.1.0" />
-		<PackageReference Include="Serilog.Sinks.Grafana.Loki" Version="8.3.1" />
 
 		<!-- Misc -->
 		<PackageReference Include="DotNetEnv" Version="3.1.1" />
@@ -26,16 +25,20 @@
 		<PackageReference Include="AspNetCore.HealthChecks.UI.Client" Version="9.0.0" />
 
 		<!-- Wolverine - ES / MessageBroker / Outbox -->
-		<PackageReference Include="Weasel.Core" Version="8.4.1" />
+		<PackageReference Include="Weasel.Core" Version="8.4.2" />
 		<PackageReference Include="Marten" Version="8.17.0" />
-		<PackageReference Include="WolverineFx" Version="5.8.0" />
-		<PackageReference Include="WolverineFx.AzureServiceBus" Version="5.8.0" />
-		<PackageReference Include="WolverineFx.Marten" Version="5.8.0" />
-		<PackageReference Include="WolverineFx.RabbitMQ" Version="5.8.0" />
+		<PackageReference Include="WolverineFx" Version="5.9.2" />
+		<PackageReference Include="WolverineFx.AzureServiceBus" Version="5.9.2" />
+		<PackageReference Include="WolverineFx.Marten" Version="5.9.2" />
+		<PackageReference Include="WolverineFx.RabbitMQ" Version="5.9.2" />
 
 		<!-- OpenTelemetry Core Packages -->
 		<PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.14.0" />
 		<PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.14.0" />
+
+		<!-- Azure Monitor OpenTelemetry (APM for Production) -->
+		<PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.4.0" />
+		<PackageReference Include="Azure.Identity" Version="1.17.1" />
 
 		<!-- OpenTelemetry Instrumentation Packages -->
 		<PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.14.0" />

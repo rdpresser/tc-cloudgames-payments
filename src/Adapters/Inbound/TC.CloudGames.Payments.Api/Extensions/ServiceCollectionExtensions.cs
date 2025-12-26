@@ -1,4 +1,7 @@
-﻿using TC.CloudGames.SharedKernel.Infrastructure.Telemetry;
+﻿using Azure.Identity;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
+using OpenTelemetry;
+using TC.CloudGames.SharedKernel.Infrastructure.Telemetry;
 
 namespace TC.CloudGames.Payments.Api.Extensions
 {
@@ -23,46 +26,103 @@ namespace TC.CloudGames.Payments.Api.Extensions
             return services;
         }
 
-        private static IHostApplicationBuilder AddOpenTelemetryExporters(this IHostApplicationBuilder builder)
+        private static void AddOpenTelemetryExporters(OpenTelemetryBuilder otelBuilder, IHostApplicationBuilder builder)
         {
+            var appInsightsConnectionString = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+            var useAzureMonitor = !string.IsNullOrWhiteSpace(appInsightsConnectionString);
             var useOtlpExporter = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
 
-            // Load Grafana configuration via Helper (to check if Agent is enabled)
+            // Priority 1: Azure Monitor (Production - buffered/async, no timeout issues)
+            if (useAzureMonitor)
+            {
+                // Get sampling ratio from configuration with validation (default: 1.0 = 100%)
+                var samplingRatioConfig = builder.Configuration["AzureMonitor:SamplingRatio"];
+                var samplingRatio = 1.0f;
+                
+                if (!string.IsNullOrWhiteSpace(samplingRatioConfig))
+                {
+                    if (float.TryParse(samplingRatioConfig, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var ratio))
+                    {
+                        if (ratio >= 0.0f && ratio <= 1.0f)
+                        {
+                            samplingRatio = ratio;
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[WARN] Invalid AzureMonitor:SamplingRatio '{samplingRatioConfig}'. Value must be between 0.0 and 1.0. Falling back to default 1.0 (100%).");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[WARN] Could not parse AzureMonitor:SamplingRatio value '{samplingRatioConfig}' as a floating-point number. Falling back to default 1.0 (100%).");
+                    }
+                }
+
+                // Store sampling ratio in service collection for later logging in Program.cs
+                builder.Services.AddSingleton(new TelemetryExporterInfo
+                {
+                    ExporterType = "AzureMonitor",
+                    SamplingRatio = samplingRatio
+                });
+
+                // Configure Azure Monitor exporter using the existing OpenTelemetry builder
+                otelBuilder.UseAzureMonitor(options =>
+                {
+                    options.ConnectionString = appInsightsConnectionString;
+
+                    // Use DefaultAzureCredential for RBAC/Workload Identity authentication
+                    // This enables AAD-based auth when running in AKS with Workload Identity
+                    options.Credential = new DefaultAzureCredential();
+
+                    // Sampling ratio from configuration
+                    options.SamplingRatio = samplingRatio;
+
+                    // Enable Live Metrics for real-time monitoring
+                    options.EnableLiveMetrics = true;
+                });
+
+                return;
+            }
+
+            // Priority 2: Grafana Agent OTLP (Local development)
             var grafanaSettings = GrafanaHelper.Build(builder.Configuration);
 
             if (grafanaSettings.Agent.Enabled && useOtlpExporter)
             {
-                // Manual OTLP Exporter configuration with Grafana settings
-                builder.Services.AddOpenTelemetry()
-                    .WithTracing(tracing =>
+                otelBuilder.WithTracing(tracerBuilder =>
+                {
+                    tracerBuilder.AddOtlpExporter(otlp =>
                     {
-                        tracing.AddOtlpExporter(otlp =>
+                        otlp.Endpoint = new Uri(grafanaSettings.Otlp.Endpoint);
+                        otlp.Protocol = grafanaSettings.Otlp.Protocol.ToLowerInvariant() == "grpc"
+                            ? OpenTelemetry.Exporter.OtlpExportProtocol.Grpc
+                            : OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
+
+                        if (!string.IsNullOrWhiteSpace(grafanaSettings.Otlp.Headers))
                         {
-                            otlp.Endpoint = new Uri(grafanaSettings.Otlp.Endpoint);
-                            otlp.Protocol = grafanaSettings.Otlp.Protocol.ToLowerInvariant() == "grpc"
-                                ? OpenTelemetry.Exporter.OtlpExportProtocol.Grpc
-                                : OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
+                            otlp.Headers = grafanaSettings.Otlp.Headers;
+                        }
 
-                            // Headers (if any - normally not needed with local Grafana Agent)
-                            if (!string.IsNullOrWhiteSpace(grafanaSettings.Otlp.Headers))
-                            {
-                                otlp.Headers = grafanaSettings.Otlp.Headers;
-                            }
-
-                            // Timeout
-                            otlp.TimeoutMilliseconds = grafanaSettings.Otlp.TimeoutSeconds * 1000;
-                        });
+                        otlp.TimeoutMilliseconds = grafanaSettings.Otlp.TimeoutSeconds * 1000;
                     });
+                });
 
-                Console.WriteLine($"[INFO] OTLP Exporter configured - Endpoint: {grafanaSettings.Otlp.Endpoint}, Protocol: {grafanaSettings.Otlp.Protocol}");
+                // Store OTLP info in service collection for later logging in Program.cs
+                builder.Services.AddSingleton(new TelemetryExporterInfo
+                {
+                    ExporterType = "OTLP",
+                    Endpoint = grafanaSettings.Otlp.Endpoint,
+                    Protocol = grafanaSettings.Otlp.Protocol
+                });
+
+                return;
             }
-            else
+
+            // Fallback: No external exporter configured
+            builder.Services.AddSingleton(new TelemetryExporterInfo
             {
-                Console.WriteLine("[WARN] Grafana Agent is DISABLED - Traces will be generated but NOT exported.");
-                Console.WriteLine("[WARN] To enable: Set Grafana:Agent:Enabled=true or GRAFANA_AGENT_ENABLED=true");
-            }
-
-            return builder;
+                ExporterType = "None"
+            });
         }
 
         public static IServiceCollection AddCustomOpenTelemetry(this IServiceCollection services, IHostApplicationBuilder builder, IConfiguration configuration)
@@ -83,7 +143,7 @@ namespace TC.CloudGames.Payments.Api.Extensions
             // ==============================================================
             // METRICS AND TRACES
             // ==============================================================
-            services.AddOpenTelemetry()
+            var otelBuilder = services.AddOpenTelemetry()
                 // Configure ResourceBuilder (metadata sent with metrics and traces)
                 .ConfigureResource(resource => resource.AddService(serviceName, serviceNamespace: serviceNamespace, serviceVersion: serviceVersion, serviceInstanceId: instanceId)
                 .AddAttributes(new Dictionary<string, object>
@@ -112,7 +172,7 @@ namespace TC.CloudGames.Payments.Api.Extensions
                         .AddMeter("System.Net.Http")
                         .AddMeter("Wolverine")
                         .AddMeter("Marten")
-                        .AddMeter(TelemetryConstants.PaymentsMeterName)
+                            .AddMeter(TelemetryConstants.PaymentsMeterName) 
                         // Exporters
                         .AddPrometheusExporter())
                 .WithTracing(tracingBuilder =>
@@ -184,18 +244,12 @@ namespace TC.CloudGames.Payments.Api.Extensions
                         .AddNpgsql()
                         //.AddFusionCacheInstrumentation()
                         .AddRedisInstrumentation()
+                        // Custom sources (Application, Wolverine, Marten)
+                        .AddSource(TelemetryConstants.PaymentsActivitySource)
                         .AddSource(TelemetryConstants.DatabaseActivitySource)
                         .AddSource(TelemetryConstants.CacheActivitySource)
-                        // Important: filter out internal sources that cause 503s
-                        .SetSampler(new AlwaysOnSampler())
-                        .AddProcessor(new FilteringActivityProcessor(activity =>
-                            !activity.Source.Name.StartsWith("Azure.") &&
-                            !activity.Source.Name.StartsWith("Wolverine") &&
-                            !activity.Source.Name.StartsWith("Marten") &&
-                            !activity.DisplayName.Contains("ServiceBus")))
-                    ////.AddSource("Wolverine")
-                    ////.AddSource("Marten")
-                    );
+                        .AddSource("Wolverine")
+                        .AddSource("Marten"));
 
             // ==============================================================
             // CUSTOM METRICS REGISTRATION
@@ -203,7 +257,7 @@ namespace TC.CloudGames.Payments.Api.Extensions
             services.AddSingleton<SystemMetrics>();
 
             // Add exporters (OTLP will be configured only if Grafana is enabled)
-            builder.AddOpenTelemetryExporters();
+                AddOpenTelemetryExporters(otelBuilder, builder); 
 
             return services;
         }
