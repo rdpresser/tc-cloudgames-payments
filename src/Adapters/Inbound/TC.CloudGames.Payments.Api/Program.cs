@@ -19,7 +19,12 @@ if (!builder.Environment.IsEnvironment("Testing"))
 
 // Get logger instance for Program and log telemetry configuration
 var logger = app.Services.GetRequiredService<ILogger<TC.CloudGames.Payments.Api.Program>>();
-TelemetryConstants.LogTelemetryConfiguration(logger);
+TelemetryConstants.LogTelemetryConfiguration(logger, app.Configuration);
+
+// Log APM/exporter configuration (Azure Monitor, OTLP, etc.)
+// This info was populated during service configuration in ServiceCollectionExtensions
+var exporterInfo = app.Services.GetService<TC.CloudGames.Payments.Api.Extensions.TelemetryExporterInfo>();
+TelemetryConstants.LogApmExporterConfiguration(logger, exporterInfo);
 
 // Use metrics authentication middleware extension
 app.UseMetricsAuthentication();
