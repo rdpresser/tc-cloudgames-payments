@@ -33,7 +33,7 @@
 		<PackageReference Include="WolverineFx.RabbitMQ" Version="5.9.2" />
 
 		<!-- OpenTelemetry Core Packages -->
-		<PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.14.0" />
+		<PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.2" />
 		<PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.14.0" />
 
 		<!-- Azure Monitor OpenTelemetry (APM for Production) -->
