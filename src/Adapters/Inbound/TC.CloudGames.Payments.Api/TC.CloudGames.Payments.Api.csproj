@@ -26,7 +26,7 @@
 
 		<!-- Wolverine - ES / MessageBroker / Outbox -->
 		<PackageReference Include="Weasel.Core" Version="8.4.2" />
-		<PackageReference Include="Marten" Version="8.17.0" />
+		<PackageReference Include="Marten" Version="8.37.0" />
 		<PackageReference Include="WolverineFx" Version="5.9.2" />
 		<PackageReference Include="WolverineFx.AzureServiceBus" Version="5.9.2" />
 		<PackageReference Include="WolverineFx.Marten" Version="5.9.2" />
